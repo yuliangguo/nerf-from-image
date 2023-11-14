@@ -24,7 +24,7 @@ import skimage.io
 import glob
 import json
 import imageio
-# from PIL import Image
+import matplotlib.pyplot as plt
 import pycocotools.mask
 from torchvision import transforms
 from tqdm import tqdm
@@ -32,6 +32,7 @@ from nuscenes.utils.geometry_utils import BoxVisibility, view_points
 from nuscenes.nuscenes import NuScenes
 
 from lib import pose_utils
+from lib.utils import pts_in_box_3d
 
 
 class CustomDataset(torch.utils.data.Dataset):
@@ -764,9 +765,6 @@ class CARLADataset(torch.utils.data.Dataset):
         }
 
 
-
-
-
 class NuScenesDataset(torch.utils.data.Dataset):
     def __init__(self,
                  nusc_data_dir,
@@ -776,12 +774,22 @@ class NuScenesDataset(torch.utils.data.Dataset):
                  img_size=128,
                  debug=False
                  ):
-
+        self.nusc_cat = 'vehicle.car'
         self.seg_cat = 'car'
         self.nusc_data_dir = nusc_data_dir
         self.nusc_seg_dir = nusc_seg_dir
         self.nusc = NuScenes(version=nusc_version, dataroot=nusc_data_dir, verbose=True)
         self.img_size = img_size
+
+        # load pre-prepared qualified sample indices
+        subset_index_file = 'data/nusc.' + nusc_version + '.' + split + '.' + self.nusc_cat + '.json'
+        nusc_subset = json.load(open(subset_index_file))
+        self.all_valid_samples = nusc_subset['all_valid_samples']
+        self.anntokens_per_ins = nusc_subset['anntokens_per_ins']
+        self.instoken_per_ann = nusc_subset['instoken_per_ann']
+        self.sample_attr = nusc_subset['sample_attr']
+        self.lenids = len(self.all_valid_samples)
+        print('Loaded existing index file for valid samples.')
 
         print('Preparing camera data dictionary for fast retrival given image name')
         self.cam_data_dict = {}
@@ -789,6 +797,8 @@ class NuScenesDataset(torch.utils.data.Dataset):
             if 'CAM' in sample['channel']:
                 self.cam_data_dict[os.path.basename(sample['filename'])] = sample
 
+        self.out_gt_depth = True
+        self.pred_box2d = False
         self.debug = debug
 
     def get_mask_occ_from_ins(self, masks, tgt_ins_id):
@@ -806,10 +816,200 @@ class NuScenesDataset(torch.utils.data.Dataset):
         mask_occ[tgt_mask > 0] = 1
         return mask_occ
 
+    def __len__(self):
+        return self.lenids
+
+    def __getitem__(self, idx):
+        sample_data = {}
+        anntoken, cam = self.all_valid_samples[idx]
+        if self.debug:
+            print(f'anntoken: {anntoken}')
+
+        # For each annotation (one annotation per timestamp) get all the sensors
+        sample_ann = self.nusc.get('sample_annotation', anntoken)
+        sample_record = self.nusc.get('sample', sample_ann['sample_token'])
+
+        # Figure out which camera the object is fully visible in (this may return nothing).
+        if self.debug:
+            print(f'     {cam}')
+        data_path, boxes, camera_intrinsic = self.nusc.get_sample_data(sample_record['data'][cam],
+                                                                       box_vis_level=BoxVisibility.ALL,
+                                                                       selected_anntokens=[anntoken])
+        # Plot CAMERA view.
+        img = imageio.imread(data_path)
+
+        # box here is in sensor coordinate system
+        box = boxes[0]
+        # compute the camera pose in object frame, make sure dataset and model definitions consistent
+        obj_center = box.center
+        obj_orientation = box.orientation.rotation_matrix
+        obj_pose = np.concatenate([obj_orientation, np.expand_dims(obj_center, -1)], axis=1)
+        # Compute camera pose in object frame = c2o transformation matrix
+        # Recall that object pose in camera frame = o2c transformation matrix
+        R_c2o = obj_orientation.transpose()
+        t_c2o = - R_c2o @ np.expand_dims(obj_center, -1)
+        cam_pose = np.concatenate([R_c2o, t_c2o], axis=1)
+
+        # find the valid instance given 2d box projection
+        corners = view_points(box.corners(), view=camera_intrinsic, normalize=True)[:2, :]
+        min_x = np.min(corners[0, :])
+        max_x = np.max(corners[0, :])
+        min_y = np.min(corners[1, :])
+        max_y = np.max(corners[1, :])
+        box_2d = [min_x, min_y, max_x, max_y]
+
+        json_file = os.path.join(self.nusc_seg_dir, cam, os.path.basename(data_path)[:-4] + '.json')
+        preds = json.load(open(json_file))
+        ins_masks = []
+        for box_id in range(0, len(preds['boxes'])):
+            mask_file = os.path.join(self.nusc_seg_dir, cam, os.path.basename(data_path)[:-4] + f'_{box_id}.png')
+            mask = imageio.imread(mask_file)
+            ins_masks.append(mask)
+        if len(ins_masks) == 0:
+            mask_occ = None
+        else:
+            tgt_ins_id = self.sample_attr[anntoken][cam]['seg_id']
+            mask_occ = self.get_mask_occ_from_ins(ins_masks, tgt_ins_id)
+            if self.pred_box2d:
+                box_2d = preds['boxes'][tgt_ins_id]
+                # enlarge pred_box
+                # box_2d = roi_resize(box_2d, ratio=self.box2d_rz_ratio)
+        # lidar_cnt = self.sample_attr[anntoken][cam]['lidar_cnt']
+
+        # Prepare gt depth map using lidar points
+        pointsensor_token = sample_record['data']['LIDAR_TOP']
+        camtoken = sample_record['data'][cam]
+        # lidarseg_idx = self.nusc.lidarseg_name2idx_mapping[self.nusc_cat]
+
+        # Only the lider points within the target camera image belong to the target class is returned.
+        lidar_pts_im, lider_pts_depth, _ = self.nusc.explorer.map_pointcloud_to_image(pointsensor_token, camtoken,
+                                                                                      render_intensity=False,
+                                                                                      show_lidarseg=False,
+                                                                                      filter_lidarseg_labels=None,
+                                                                                      lidarseg_preds_bin_path=None,
+                                                                                      show_panoptic=False)
+
+        lidar_pts_cam = np.matmul(np.linalg.inv(camera_intrinsic), lidar_pts_im) * lider_pts_depth
+        pts_ann_indices = pts_in_box_3d(lidar_pts_cam, box.corners(), keep_top_portion=0.9)
+        lidar_pts_im_ann = lidar_pts_im[:, pts_ann_indices]
+        lider_pts_depth_ann = lider_pts_depth[pts_ann_indices]
+
+        depth_map = np.zeros(img.shape[:2]).astype(np.float32)
+        depth_map[
+            lidar_pts_im_ann[1, :].astype(np.int32), lidar_pts_im_ann[0, :].astype(np.int32)] = lider_pts_depth_ann
+        sample_data['depth_maps'] = torch.from_numpy(depth_map.astype(np.float32))
+
+        # ATTENTION: prepare batch data including ray based samples can further improve efficiency,
+        # but lower flexible for training considering different crop sizes
+
+        sample_data['imgs'] = torch.from_numpy(img.astype(np.float32) / 255.)
+        sample_data['masks_occ'] = torch.from_numpy(mask_occ.astype(np.float32))
+        sample_data['rois'] = torch.from_numpy(np.asarray(box_2d).astype(np.int32))
+        sample_data['cam_intrinsics'] = torch.from_numpy(camera_intrinsic.astype(np.float32))
+        sample_data['cam_poses'] = torch.from_numpy(np.asarray(cam_pose).astype(np.float32))
+        sample_data['obj_poses'] = torch.from_numpy(np.asarray(obj_pose).astype(np.float32))
+        sample_data['instoken'] = self.instoken_per_ann[anntoken]
+        sample_data['anntoken'] = anntoken
+        sample_data['cam_ids'] = cam
+        wlh = self.nusc.get('sample_annotation', anntoken)['size']
+        sample_data['wlh'] = torch.tensor(wlh, dtype=torch.float32)
+
+        """
+            Prepare cropped date for BootInv
+        """
+        bbox = CustomDataset.square_bbox(box_2d)
+        K = camera_intrinsic.copy()
+
+        # important! sfm_pose must not be overwritten -- it is already in the correct reference frame
+        img = img.astype(np.float32).copy() / 255.
+        img = CustomDataset.crop(img, bbox, bgval=1)
+        mask = (mask_occ > 0).astype(np.float32)[:, :, None]
+        mask = CustomDataset.crop(mask, bbox, bgval=0)
+        K[0, 2] -= bbox[0]
+        K[1, 2] -= bbox[1]
+
+        # Scale image so largest bbox size is img_size
+        bwidth = np.shape(img)[0]
+        bheight = np.shape(img)[1]
+        scale = self.img_size / float(max(bwidth, bheight))
+        img, _ = CustomDataset.resize_img(img, scale)
+        mask, _ = CustomDataset.resize_img(mask, scale)
+        K[:2, :] *= scale
+
+        # Finally transpose the image to 3xHxW
+        img = np.transpose(img, (2, 0, 1))
+
+        mask = mask[None, :, :]
+        img = img * 2 - 1
+        img *= mask
+        img = torch.FloatTensor(img).permute(1, 2, 0)
+
+        sample_data['img_batch'] = img
+        sample_data['mask_batch'] = torch.FloatTensor(mask)
+        sample_data['bbox_batch'] = torch.FloatTensor(bbox)
+        sample_data['K_batch'] = torch.FloatTensor(K)
+
+        # if self.debug:
+        #     print(
+        #         f'        tgt instance id: {tgt_ins_id}, '
+        #         f'lidar pts cnt: {lidar_cnt} ')
+        #
+        #     camtoken = sample_record['data'][cam]
+        #     fig, axes = plt.subplots(1, 2, figsize=(18, 9))
+        #
+        #     # draw object box on the image
+        #     img2 = np.copy(img)
+        #     corners_3d = corners_of_box(obj_pose, wlh, is_kitti=False)
+        #     pred_uv = view_points(
+        #         corners_3d,
+        #         camera_intrinsic, normalize=True)
+        #     c = np.array([0, 255, 0]).astype(np.float)
+        #     img2 = render_box(img2, pred_uv, colors=(c, c, c))
+        #     if self.add_pose_err > 0:
+        #         corners_3d_w_err = corners_of_box(obj_pose_w_err, wlh, is_kitti=False)
+        #         # corners_3d_w_err = np.array(objects_pred['corners_3d'][asso_obx_id]).T
+        #         pred_uv_w_err = view_points(
+        #             corners_3d_w_err,
+        #             camera_intrinsic, normalize=True)
+        #         c = np.array([255, 0, 0]).astype(np.float)
+        #         img2 = render_box(img2, pred_uv_w_err, colors=(c, c, c))
+        #     axes[0].imshow(img2)
+        #     axes[0].set_title(self.nusc.get('sample_data', camtoken)['channel'])
+        #     axes[0].axis('off')
+        #     axes[0].set_aspect('equal')
+        #     # c = np.array(self.nusc.colormap[box.name]) / 255.0
+        #     # box.render(axes[0], view=camera_intrinsic, normalize=True, colors=(c, c, c))
+        #
+        #     if self.seg_type == 'panoptic':
+        #         seg_vis = pan2ins_vis(pan_label, name2label[self.seg_cat][2], self.divisor)
+        #     elif self.seg_type == 'instance':
+        #         seg_vis = ins2vis(ins_masks)
+        #     axes[1].imshow(seg_vis)
+        #     axes[1].set_title('pred instance')
+        #     axes[1].axis('off')
+        #     axes[1].set_aspect('equal')
+        #     # c = np.array(nusc.colormap[box.name]) / 255.0
+        #     min_x, min_y, max_x, max_y = box_2d
+        #     rect = patches.Rectangle((min_x, min_y), max_x - min_x, max_y - min_y,
+        #                              linewidth=2, edgecolor='y', facecolor='none')
+        #     axes[1].add_patch(rect)
+        #
+        #     axes[0].scatter(lidar_pts_im_ann[0, :], lidar_pts_im_ann[1, :], c=lider_pts_depth_ann, s=5)
+        #     axes[1].scatter(lidar_pts_im_ann[0, :], lidar_pts_im_ann[1, :], c=lider_pts_depth_ann, s=5)
+        #
+        #     self.nusc.render_annotation(anntoken, margin=30, box_vis_level=BoxVisibility.ALL)
+        #     plt.tight_layout()
+        #     plt.show()
+        #     print(f"        Lidar pts in target segment: {lidar_cnt}")
+        #     # Nusc claimed pixel ratio visible from 6 cameras, seem not very reliable since no GT amodel segmentation
+        #     visibility_token = sample_ann['visibility_token']
+        #     print("        Visibility: {}".format(self.nusc.get('visibility', visibility_token)))
+
+        return sample_data
+
     def get_objects_in_image(self, filename):
         """
             Output mask-rcnn masks and boxes per image
-            TODO: add the associated GT object pose, lidar measures
         """
         if filename not in self.cam_data_dict.keys():
             print(f'Target image file {filename} does not contain valid annotations')

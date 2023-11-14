@@ -190,3 +190,28 @@ class EndlessSampler:
 
     def __call__(self, batch_size):
         return list(self._yield_batch(batch_size))
+
+
+def pts_in_box_3d(pts_3d, corners_3d, keep_top_portion=1.0):
+    """
+        Extract lidar points associated within the annotation 3D box
+        Both pts_3d and corners_3d (nusc def) live in the same coordinate frame
+        keep_ratio is the top portion to be kept
+
+        return the indices
+    """
+    v1 = (corners_3d[:, 1:2] - corners_3d[:, 0:1])
+    v2 = (corners_3d[:, 3:4] - corners_3d[:, 0:1]) * keep_top_portion
+    v3 = (corners_3d[:, 4:5] - corners_3d[:, 0:1])
+    v_test = pts_3d - corners_3d[:, 0:1]
+
+    proj_1 = np.matmul(v1.T, v_test)
+    proj_2 = np.matmul(v2.T, v_test)
+    proj_3 = np.matmul(v3.T, v_test)
+
+    subset1 = np.logical_and(proj_1 > 0,  proj_1 < np.matmul(v1.T, v1))
+    subset2 = np.logical_and(proj_2 > 0,  proj_2 < np.matmul(v2.T, v2))
+    subset3 = np.logical_and(proj_3 > 0,  proj_3 < np.matmul(v3.T, v3))
+
+    subset_final = np.logical_and(subset1, np.logical_and(subset2, subset3))
+    return np.squeeze(subset_final)

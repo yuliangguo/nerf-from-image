@@ -1,19 +1,16 @@
 import os
-import json
-import os
 import numpy as np
 import torch
 import torch.nn.functional as F
 import torchvision
-import matplotlib.pyplot as plt
 import time
+from datetime import date, datetime
 import sys
 import math
-import cv2
-import imageio
 
 from torch.utils import tensorboard
 from torch import nn
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 import arguments
@@ -664,11 +661,8 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
 
 
 if __name__ == '__main__':
-    tgt_img_name = 'n015-2018-10-08-15-36-50+0800__CAM_FRONT__1538984240912467.jpg'
-    # tgt_img_name = 'n008-2018-08-27-11-48-51-0400__CAM_FRONT_RIGHT__1535385099370482.jpg'
-    # tgt_img_name = 'n008-2018-08-01-15-16-36-0400__CAM_FRONT__1533151609912404.jpg'
-
-    out_dir = os.path.join('outputs', tgt_img_name[:-4])
+    exp_name = 'nusc_' + datetime.now().strftime('_%Y_%m_%d_%H_%M_%S')
+    out_dir = os.path.join('outputs', exp_name)
     if not os.path.exists(out_dir):
         os.mkdir(out_dir)
 
@@ -685,10 +679,8 @@ if __name__ == '__main__':
         debug=False,
     )
 
-    # get predicted objects and masks associated with each image
-    manual_image = nusc_dataset.get_objects_in_image(tgt_img_name)
+    nusc_loader = DataLoader(nusc_dataset, batch_size=1, num_workers=4, shuffle=False, pin_memory=True)
 
-    imageio.imwrite(os.path.join(out_dir, tgt_img_name), (manual_image['img_org'].numpy() * 255).astype(np.uint8))
     """
         got the minimal viable portion to model to run
     """
@@ -935,15 +927,15 @@ if __name__ == '__main__':
             z_avg = model_ema.mapping_network.get_average_w()
 
         print('Running...')
-        num_samples = manual_image['bboxes'].shape[0]
         # deal with each detected object in the image
-        for idx, bbox in enumerate(manual_image['bboxes']):
+        for idx, batch_data in enumerate(nusc_loader):
+            print(f'num obj: {idx + 1}/{len(nusc_loader)}')
             t1 = time.time()
 
             # report_checkpoint_path = os.path.join(report_dir_effective,
             #                                       'report_checkpoint.pth')
 
-            target_img = manual_image['images'][idx:idx+1].to(device)
+            target_img = batch_data['img_batch'].to(device)
             # target_img = test_split[
             #     target_img_idx].images  # Target for optimization (always cropped)
             target_img_fid_ = target_img  # Target for evaluation (front view -- always cropped)
@@ -1101,7 +1093,7 @@ if __name__ == '__main__':
 
             t2 = time.time()
             print(
-                f'[{idx+1}/{num_samples}] Finished batch in {t2 - t1} s ({(t2 - t1)} s/img)'
+                f'[{idx+1}/{len(nusc_loader)}] Finished batch in {t2 - t1} s ({(t2 - t1)} s/img)'
             )
 
             # if args.inv_export_demo_sample:
