@@ -22,10 +22,14 @@ import scipy.io
 import cv2
 import skimage.io
 import glob
+import json
 import imageio
+# from PIL import Image
 import pycocotools.mask
 from torchvision import transforms
 from tqdm import tqdm
+from nuscenes.utils.geometry_utils import BoxVisibility, view_points
+from nuscenes.nuscenes import NuScenes
 
 from lib import pose_utils
 
@@ -758,3 +762,148 @@ class CARLADataset(torch.utils.data.Dataset):
             'image': img.squeeze(0),
             'pose': torch.FloatTensor(self.poses[idx]),
         }
+
+
+
+
+
+class NuScenesDataset(torch.utils.data.Dataset):
+    def __init__(self,
+                 nusc_data_dir,
+                 nusc_seg_dir,
+                 nusc_version,
+                 split='val',
+                 img_size=128,
+                 debug=False
+                 ):
+
+        self.seg_cat = 'car'
+        self.nusc_data_dir = nusc_data_dir
+        self.nusc_seg_dir = nusc_seg_dir
+        self.nusc = NuScenes(version=nusc_version, dataroot=nusc_data_dir, verbose=True)
+        self.img_size = img_size
+
+        print('Preparing camera data dictionary for fast retrival given image name')
+        self.cam_data_dict = {}
+        for sample in self.nusc.sample_data:
+            if 'CAM' in sample['channel']:
+                self.cam_data_dict[os.path.basename(sample['filename'])] = sample
+
+        self.debug = debug
+
+    def get_mask_occ_from_ins(self, masks, tgt_ins_id):
+        """
+            Prepare occupancy mask:
+                target object: 1
+                background: -1 (not likely to occlude the object)
+                occluded the instance: 0 (seems only able to reason the occlusion by foreground)
+        """
+        tgt_mask = masks[tgt_ins_id]
+        mask_occ = np.zeros_like(tgt_mask).astype(np.int32)
+        mask_union = np.sum(np.asarray(masks), axis=0)
+
+        mask_occ[mask_union == 0] = -1
+        mask_occ[tgt_mask > 0] = 1
+        return mask_occ
+
+    def get_objects_in_image(self, filename):
+        """
+            Output mask-rcnn masks and boxes per image
+            TODO: add the associated GT object pose, lidar measures
+        """
+        if filename not in self.cam_data_dict.keys():
+            print(f'Target image file {filename} does not contain valid annotations')
+            return None
+
+        cam_data = self.cam_data_dict[filename]
+        # load image, 2D boxes and masks, only need to get K from nusc
+        impath, _, camera_intrinsic = self.nusc.get_sample_data(cam_data['token'], box_vis_level=BoxVisibility.ANY)
+
+        # load image
+        # img_org = Image.open(impath)
+        # img_org = np.asarray(img_org)
+        img_org = imageio.imread(impath)
+
+        # load mask-rcnn predicted instance masks and 2D boxes
+        cam = cam_data['channel']
+        json_file = os.path.join(self.nusc_seg_dir, cam, os.path.basename(impath)[:-4] + '.json')
+        preds = json.load(open(json_file))
+        ins_masks = []
+        rois = []
+        for ii in range(0, len(preds['boxes'])):
+            mask_file = os.path.join(self.nusc_seg_dir, cam, os.path.basename(impath)[:-4] + f'_{ii}.png')
+            # mask = np.asarray(Image.open(mask_file))
+            mask = imageio.imread(mask_file)
+            if self.seg_cat in preds['labels'][ii]:
+                ins_masks.append(mask)
+                box_2d = preds['boxes'][ii]
+                # enlarge pred_box
+                # box_2d = roi_resize(box_2d, ratio=self.box2d_rz_ratio)
+                rois.append(box_2d)
+        if len(rois) == 0:
+            print('No valid objects found in the Image!')
+            return None
+
+        masks_occ = []
+        for ii in range(0, len(ins_masks)):
+            mask_occ = self.get_mask_occ_from_ins(ins_masks, ii)
+            masks_occ.append(mask_occ)
+
+        # Need to predict whl from trained model
+        if self.debug:
+            self.nusc.render_sample_data(cam_data['token'])
+            plt.show()
+
+        # output data
+        sample_data = {}
+        sample_data['img_org'] = torch.from_numpy(img_org.astype(np.float32) / 255.)
+        sample_data['masks_occ'] = torch.from_numpy(np.asarray(masks_occ).astype(np.float32))
+        sample_data['rois'] = torch.from_numpy(np.asarray(rois).astype(np.int32))
+        sample_data['cam_intrinsics'] = torch.from_numpy(camera_intrinsic.astype(np.float32))
+
+        # prepared square boxes and crops
+        images = []
+        masks = []
+        bboxes = []
+        Ks = []
+
+        for ii, bbox in enumerate(rois):
+            bbox = CustomDataset.square_bbox(bbox)
+            max_res = max(img_org.shape[0], img_org.shape[1])
+
+            K = camera_intrinsic.copy()
+            # important! sfm_pose must not be overwritten -- it is already in the correct reference frame
+            img = img_org.astype(np.float32).copy()/255.
+            img = CustomDataset.crop(img, bbox, bgval=1)
+            mask = ins_masks[ii].copy()[:, :, None]/255
+            mask = CustomDataset.crop(mask, bbox, bgval=0)
+            K[0, 2] -= bbox[0]
+            K[1, 2] -= bbox[1]
+
+            # Scale image so largest bbox size is img_size
+            bwidth = np.shape(img)[0]
+            bheight = np.shape(img)[1]
+            scale = self.img_size / float(max(bwidth, bheight))
+            img, _ = CustomDataset.resize_img(img, scale)
+            mask, _ = CustomDataset.resize_img(mask, scale)
+            K[:2, :] *= scale
+
+            # Finally transpose the image to 3xHxW
+            img = np.transpose(img, (2, 0, 1))
+
+            mask = mask[None, :, :]
+            img = img * 2 - 1
+            img *= mask
+            img = torch.FloatTensor(img).permute(1, 2, 0)
+
+            images.append(img.unsqueeze(0))
+            masks.append(torch.FloatTensor(mask))
+            bboxes.append(torch.FloatTensor(bbox).unsqueeze(0))
+            Ks.append(torch.FloatTensor(K).unsqueeze(0))
+
+        sample_data['images'] = torch.cat(images, dim=0)
+        sample_data['masks'] = torch.cat(masks, dim=0)
+        sample_data['bboxes'] = torch.cat(bboxes, dim=0)
+        sample_data['Ks'] = torch.cat(Ks, dim=0)
+
+        return sample_data
