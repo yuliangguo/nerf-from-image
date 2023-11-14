@@ -1,0 +1,7 @@
+.idea
+*__pycache__*
+coords_checkpoints
+datasets
+gan_checkpoints
+outputs
+reports

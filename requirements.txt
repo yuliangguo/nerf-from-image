@@ -1,5 +1,6 @@
 torch
 torchvision
+Pillow==9.5.0
 imageio
 opencv-python
 tensorboard
@@ -10,3 +11,4 @@ tqdm
 lpips
 pycocotools
 pytorch-fid
+git+https://github.com/facebookresearch/detectron2.git
