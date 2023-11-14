@@ -10,6 +10,7 @@ import time
 import sys
 import math
 from PIL import Image
+import cv2
 
 from nuscenes.utils.geometry_utils import BoxVisibility, view_points
 from nuscenes.nuscenes import NuScenes
@@ -30,6 +31,65 @@ from lib import pose_estimation
 from models import generator
 from models import discriminator
 from models import encoder
+
+
+dataset_config = {'scene_range': 1.4, 'camera_flipped': True, 'white_background': False}
+
+
+def square_bbox(bbox):
+    sq_bbox = [int(round(coord)) for coord in bbox]
+    bwidth = sq_bbox[2] - sq_bbox[0] + 1
+    bheight = sq_bbox[3] - sq_bbox[1] + 1
+    maxdim = float(max(bwidth, bheight))
+
+    dw_b_2 = int(round((maxdim - bwidth) / 2.0))
+    dh_b_2 = int(round((maxdim - bheight) / 2.0))
+
+    sq_bbox[0] -= dw_b_2
+    sq_bbox[1] -= dh_b_2
+    sq_bbox[2] = sq_bbox[0] + maxdim - 1
+    sq_bbox[3] = sq_bbox[1] + maxdim - 1
+
+    return sq_bbox
+
+
+def crop(img, bbox, bgval=0):
+    bbox = [int(round(c)) for c in bbox]
+    bwidth = bbox[2] - bbox[0] + 1
+    bheight = bbox[3] - bbox[1] + 1
+
+    im_shape = np.shape(img)
+    im_h, im_w = im_shape[0], im_shape[1]
+
+    nc = 1 if len(im_shape) < 3 else im_shape[2]
+
+    img_out = np.ones((bheight, bwidth, nc)) * bgval
+    x_min_src = max(0, bbox[0])
+    x_max_src = min(im_w, bbox[2] + 1)
+    y_min_src = max(0, bbox[1])
+    y_max_src = min(im_h, bbox[3] + 1)
+
+    x_min_trg = x_min_src - bbox[0]
+    x_max_trg = x_max_src - x_min_src + x_min_trg
+    y_min_trg = y_min_src - bbox[1]
+    y_max_trg = y_max_src - y_min_src + y_min_trg
+
+    img_out[y_min_trg:y_max_trg,
+    x_min_trg:x_max_trg, :] = img[y_min_src:y_max_src,
+                              x_min_src:x_max_src, :]
+    return img_out
+
+
+def resize_img(img, scale_factor):
+    new_size = (np.round(np.array(img.shape[:2]) *
+                         scale_factor)).astype(int)
+    new_img = cv2.resize(img, (new_size[1], new_size[0]),
+                         interpolation=cv2.INTER_AREA)
+    # This is scale factor of [height, width] i.e. [y, x]
+    actual_factor = [
+        new_size[0] / float(img.shape[0]), new_size[1] / float(img.shape[1])
+    ]
+    return new_img, actual_factor
 
 
 def roi_resize(roi, ratio=1.0):
@@ -69,6 +129,7 @@ class NuScenesDataset(torch.utils.data.Dataset):
                  nusc_seg_dir,
                  nusc_version,
                  split='train',
+                 img_size=128,
                  debug=False
                  ):
 
@@ -76,6 +137,7 @@ class NuScenesDataset(torch.utils.data.Dataset):
         self.nusc_data_dir = nusc_data_dir
         self.nusc_seg_dir = nusc_seg_dir
         self.nusc = NuScenes(version=nusc_version, dataroot=nusc_data_dir, verbose=True)
+        self.img_size = img_size
 
         print('Preparing camera data dictionary for fast retrival given image name')
         self.cam_data_dict = {}
@@ -99,8 +161,8 @@ class NuScenesDataset(torch.utils.data.Dataset):
         impath, _, camera_intrinsic = self.nusc.get_sample_data(cam_data['token'], box_vis_level=BoxVisibility.ANY)
 
         # load image
-        img = Image.open(impath)
-        img = np.asarray(img)
+        img_org = Image.open(impath)
+        img_org = np.asarray(img_org)
 
         # load mask-rcnn predicted instance masks and 2D boxes
         cam = cam_data['channel']
@@ -133,12 +195,56 @@ class NuScenesDataset(torch.utils.data.Dataset):
 
         # output data
         sample_data = {}
-        sample_data['img'] = torch.from_numpy(img.astype(np.float32) / 255.)
+        sample_data['img_org'] = torch.from_numpy(img_org.astype(np.float32) / 255.)
         sample_data['masks_occ'] = torch.from_numpy(np.asarray(masks_occ).astype(np.float32))
         sample_data['rois'] = torch.from_numpy(np.asarray(rois).astype(np.int32))
         sample_data['cam_intrinsics'] = torch.from_numpy(camera_intrinsic.astype(np.float32))
 
-        # TODO: square box and crop
+        # prepared square boxes and crops
+        images = []
+        masks = []
+        bboxes = []
+        Ks = []
+
+        for ii, bbox in enumerate(rois):
+            bbox = square_bbox(bbox)
+            max_res = max(img_org.shape[0], img_org.shape[1])
+
+            K = camera_intrinsic.copy()
+            # important! sfm_pose must not be overwritten -- it is already in the correct reference frame
+            img = img_org.astype(np.float32).copy()/255.
+            img = crop(img, bbox, bgval=1)
+            mask = ins_masks[ii].copy()[:, :, None]/255
+            mask = crop(mask, bbox, bgval=0)
+            K[0, 2] -= bbox[0]
+            K[1, 2] -= bbox[1]
+
+            # Scale image so largest bbox size is img_size
+            bwidth = np.shape(img)[0]
+            bheight = np.shape(img)[1]
+            scale = self.img_size / float(max(bwidth, bheight))
+            img, _ = resize_img(img, scale)
+            mask, _ = resize_img(mask, scale)
+            K[:2, :] *= scale
+
+            # Finally transpose the image to 3xHxW
+            img = np.transpose(img, (2, 0, 1))
+
+            mask = mask[None, :, :]
+            img = img * 2 - 1
+            img *= mask
+            img = torch.FloatTensor(img).permute(1, 2, 0)
+
+            images.append(img.unsqueeze(0))
+            masks.append(torch.FloatTensor(mask))
+            bboxes.append(torch.FloatTensor(bbox).unsqueeze(0))
+            Ks.append(torch.FloatTensor(K).unsqueeze(0))
+
+        sample_data['images'] = torch.cat(images, dim=0)
+        sample_data['masks'] = torch.cat(masks, dim=0)
+        sample_data['bboxes'] = torch.cat(bboxes, dim=0)
+        sample_data['Ks'] = torch.cat(Ks, dim=0)
+
         return sample_data
 
 
@@ -157,9 +263,7 @@ def render(target_model,
            compute_coords=False,
            extra_model_outputs=[],
            extra_model_inputs={},
-           force_no_cam_grad=False,
-           scene_range=1.4,
-           white_background=False):
+           force_no_cam_grad=False):
 
     ray_origins, ray_directions = nerf_utils.get_ray_bundle(
         height, width, focal_length, tform_cam2world, bbox, center)
@@ -168,7 +272,7 @@ def render(target_model,
     with torch.no_grad():
         near_thresh, far_thresh = nerf_utils.compute_near_far_planes(
             ray_origins.detach(), ray_directions.detach(),
-            scene_range)
+            dataset_config['scene_range'])
 
     query_points, depth_values = nerf_utils.compute_query_points_from_rays(
         ray_origins,
@@ -316,7 +420,7 @@ def render(target_model,
         depth_values,
         normals,
         semantics,
-        white_background=white_background)
+        white_background=dataset_config['white_background'])
 
     return rgb_predicted, depth_predicted, mask_predicted, normals_predicted, semantics_predicted, model_outputs
 
@@ -324,7 +428,7 @@ def render(target_model,
 def create_model(args, device):
     return generator.Generator(
         args.latent_dim,
-        scene_range,
+        dataset_config['scene_range'],
         attention_values=args.attention_values,
         use_viewdir=use_viewdir,
         use_encoder=args.use_encoder,
@@ -427,7 +531,7 @@ def estimate_poses_batch(target_coords, target_mask, focal_guesses):
     return estimated_cam2world_mat, estimated_focal, errors
 
 
-def augment_impl(img, pose, focal, p, disable_scale=False, cached_tform=None, white_background=False):
+def augment_impl(img, pose, focal, p, disable_scale=False, cached_tform=None):
     bs = img.shape[0] if img is not None else pose.shape[0]
     device = img.device if img is not None else pose.device
 
@@ -465,7 +569,7 @@ def augment_impl(img, pose, focal, p, disable_scale=False, cached_tform=None, wh
                                         mat_scaled[:, :, 2].unsqueeze(-2),
                                         dim=-1)
         grid = F.affine_grid(mat_scaled, img.shape, align_corners=False)
-        if white_background:
+        if dataset_config['white_background']:
             assert not args.supervise_alpha
             img = img - 1  # Adjustment for white background
         img_transformed = F.grid_sample(img,
@@ -473,7 +577,7 @@ def augment_impl(img, pose, focal, p, disable_scale=False, cached_tform=None, wh
                                         mode='bilinear',
                                         padding_mode='zeros',
                                         align_corners=False)
-        if white_background:
+        if dataset_config['white_background']:
             img_transformed = img_transformed + 1  # Adjustment for white background
     else:
         img_transformed = None
@@ -511,8 +615,7 @@ def augment(img,
             p,
             disable_scale=False,
             cached_tform=None,
-            return_tform=False,
-            white_background=False):
+            return_tform=False):
     if p == 0 and cached_tform is None:
         return img, pose, focal
 
@@ -521,8 +624,7 @@ def augment(img,
     # Standard augmentation
     img_new, pose_new, focal_new, tform = augment_impl(img, pose, focal, p,
                                                        disable_scale,
-                                                       cached_tform,
-                                                       white_background=white_background)
+                                                       cached_tform)
 
     if return_tform:
         return img_new, pose_new, focal_new, tform
@@ -532,7 +634,7 @@ def augment(img,
 
 def optimize_iter(module, rgb_predicted, acc_predicted,
                   semantics_predicted, extra_model_outputs, target_img,
-                  cam, focal, white_background=False):
+                  cam, focal):
     target = target_img[..., :3]
 
     rgb_predicted_for_loss = rgb_predicted
@@ -551,7 +653,7 @@ def optimize_iter(module, rgb_predicted, acc_predicted,
                 1).expand(-1, num_augmentations, -1, -1,
                           -1).contiguous().flatten(0, 1)
             predicted_target_cat, _, _ = augment(
-                predicted_target_cat, None, None, 1.0, white_background=white_background)
+                predicted_target_cat, None, None, 1.0)
             rgb_predicted_for_loss_aug = torch.cat(
                 (rgb_predicted_for_loss_aug,
                  predicted_target_cat[:, :3]),
@@ -584,192 +686,203 @@ def optimize_iter(module, rgb_predicted, acc_predicted,
     return loss, psnr_monitor, lpips_monitor, rgb_predicted
 
 
-# TODO: export visual results inside
-# def evaluate_inversion(it, export_sample=False):
-#     item = report[it]
-#     item['ws'].append(z_.detach().cpu() * lr_gain_z)
-#     if z0_ is not None:
-#         item['z0'].append(z0_.detach().cpu())
-#     item['R'].append(R_.detach().cpu())
-#     item['s'].append(s_.detach().cpu())
-#     item['t2'].append(t2_.detach().cpu())
-#
-#     # Compute metrics for report
-#     cam, focal = pose_utils.pose_to_matrix(
-#         z0_.detach() if z0_ is not None else None,
-#         t2_.detach(),
-#         s_.detach(),
-#         F.normalize(R_.detach(), dim=-1),
-#         camera_flipped=dataset_config['camera_flipped'])
-#     rgb_predicted, _, acc_predicted, normals_predicted, semantics_predicted, extra_model_outputs = model_to_call(
-#         cam,
-#         focal,
-#         target_center_fid,
-#         target_bbox_fid,
-#         z_.detach() * lr_gain_z,
-#         use_ema=True,
-#         compute_normals=args.use_sdf and idx == 0,
-#         compute_semantics=args.attention_values > 0,
-#         force_no_cam_grad=True,
-#         extra_model_outputs=['attention_values']
-#         if args.attention_values > 0 else [],
-#         extra_model_inputs={
-#             k: v.detach() for k, v in extra_model_inputs.items()
-#         },
-#     )
-#
-#     rgb_predicted_perm = rgb_predicted.detach().permute(0, 3, 1,
-#                                                         2).clamp_(
-#         -1, 1)
-#     target_perm = target_img_fid_.permute(0, 3, 1, 2)
-#
-#     if export_sample:
-#         with torch.no_grad():
-#             demo_img = target_perm[:, :3]
-#             if use_pose_regressor and target_mask is not None:
-#                 coords_img = (
-#                         target_coords.permute(0, 3, 1, 2)
-#                         * target_mask.unsqueeze(1))
-#                 coords_img /= dataset_config['scene_range']
-#                 coords_img.clamp_(-1, 1)
-#                 if dataset_config['white_background']:
-#                     coords_img += 1 - target_mask.unsqueeze(1)
-#                 demo_img = torch.cat((demo_img, coords_img), dim=3)
-#             demo_img = torch.cat((demo_img, rgb_predicted_perm), dim=3)
-#             if normals_predicted is not None:
-#                 demo_img = torch.cat(
-#                     (demo_img, normals_predicted.permute(0, 3, 1, 2)),
-#                     dim=3)
-#
-#     item['psnr'].append(
-#         metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
-#                      target_perm[:, :3] / 2 + 0.5,
-#                      reduction='none').cpu())
-#     item['ssim'].append(
-#         metrics.ssim(rgb_predicted_perm[:, :3] / 2 + 0.5,
-#                      target_perm[:, :3] / 2 + 0.5,
-#                      reduction='none').cpu())
-#     if dataset_config['has_mask']:
-#         item['iou'].append(
-#             metrics.iou(acc_predicted,
-#                         target_perm[:, 3],
-#                         reduction='none').cpu())
-#     item['lpips'].append(
-#         loss_fn_lpips(rgb_predicted_perm[:, :3],
-#                       target_perm[:, :3],
-#                       normalize=False).flatten().cpu())
-#     if not args.inv_export_demo_sample:
-#         item['inception_activations_front'].append(
-#             torch.FloatTensor(
-#                 fid.forward_inception_batch(
-#                     inception_net,
-#                     rgb_predicted_perm[:, :3] / 2 + 0.5)))
-#     if not (args.dataset == 'p3d_car' and use_testset):
-#         # Ground-truth poses are not available on P3D Car (test set)
-#         item['rot_error'].append(
-#             pose_utils.rotation_matrix_distance(cam, gt_cam2world_mat))
-#
-#     if writer is not None and idx == 0:
-#         if it == checkpoint_steps[0]:
-#             writer.add_images(f'img/ref',
-#                               target_perm[:, :3].cpu() / 2 + 0.5, i)
-#         writer.add_images('img/recon_front',
-#                           rgb_predicted_perm.cpu() / 2 + 0.5, it)
-#         writer.add_images('img/mask_front',
-#                           acc_predicted.cpu().unsqueeze(1).clamp(0, 1),
-#                           it)
-#         if normals_predicted is not None:
-#             writer.add_images(
-#                 'img/normals_front',
-#                 normals_predicted.cpu().permute(0, 3, 1, 2) / 2 + 0.5,
-#                 it)
-#         if semantics_predicted is not None:
-#             writer.add_images(
-#                 'img/semantics_front',
-#                 (semantics_predicted @ color_palette).cpu().permute(
-#                     0, 3, 1, 2) / 2 + 0.5, it)
-#
-#     # Test with random poses
-#     rgb_predicted, _, _, normals_predicted, semantics_predicted, _ = model_to_call(
-#         target_tform_cam2world_perm,
-#         target_focal_perm,
-#         target_center_perm,
-#         target_bbox_perm,
-#         z_.detach() * lr_gain_z,
-#         use_ema=True,
-#         compute_normals=args.use_sdf and idx == 0,
-#         compute_semantics=args.attention_values > 0 and idx == 0,
-#         force_no_cam_grad=True,
-#         extra_model_inputs={
-#             k: v.detach() for k, v in extra_model_inputs.items()
-#         },
-#     )
-#     rgb_predicted_perm = rgb_predicted.detach().permute(0, 3, 1,
-#                                                         2).clamp(-1, 1)
-#     if export_sample:
-#         with torch.no_grad():
-#             demo_img = torch.cat((demo_img, rgb_predicted_perm), dim=3)
-#             if normals_predicted is not None:
-#                 demo_img = torch.cat(
-#                     (demo_img, normals_predicted.permute(0, 3, 1, 2)),
-#                     dim=3)
-#             out_dir = 'outputs'
-#             utils.mkdir(out_dir)
-#             if args.inv_manual_input_path:
-#                 out_fname = f'demo_manual_{args.dataset}_{it}it.png'
-#             else:
-#                 out_fname = f'sample_{args.dataset}_{it}it.png'
-#             out_path = os.path.join(out_dir, out_fname)
-#             print('Saving demo output to', out_path)
-#             torchvision.utils.save_image(demo_img / 2 + 0.5,
-#                                          out_path,
-#                                          nrow=1,
-#                                          padding=0)
-#     if views_per_object > 1:
-#         target_perm_random = target_img_fid_random_.permute(0, 3, 1, 2)
-#         item['psnr_random'].append(
-#             metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
-#                          target_perm_random[:, :3] / 2 + 0.5,
-#                          reduction='none').cpu())
-#         item['ssim_random'].append(
-#             metrics.ssim(rgb_predicted_perm[:, :3] / 2 + 0.5,
-#                          target_perm_random[:, :3] / 2 + 0.5,
-#                          reduction='none').cpu())
-#         item['lpips_random'].append(
-#             loss_fn_lpips(rgb_predicted_perm[:, :3],
-#                           target_perm_random[:, :3],
-#                           normalize=False).flatten().cpu())
-#     if not args.inv_export_demo_sample:
-#         item['inception_activations_random'].append(
-#             torch.FloatTensor(
-#                 fid.forward_inception_batch(
-#                     inception_net,
-#                     rgb_predicted_perm[:, :3] / 2 + 0.5)))
-#     if writer is not None and idx == 0:
-#         writer.add_images('img/recon_random',
-#                           rgb_predicted_perm.cpu() / 2 + 0.5, it)
-#         writer.add_images('img/mask_random',
-#                           acc_predicted.cpu().unsqueeze(1).clamp(0, 1),
-#                           it)
-#         if normals_predicted is not None:
-#             writer.add_images(
-#                 'img/normals_random',
-#                 normals_predicted.cpu().permute(0, 3, 1, 2) / 2 + 0.5,
-#                 it)
-#         if semantics_predicted is not None:
-#             writer.add_images(
-#                 'img/semantics_random',
-#                 (semantics_predicted @ color_palette).cpu().permute(
-#                     0, 3, 1, 2) / 2 + 0.5, it)
+def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid, target_bbox_fid, export_sample=False, inception_net=None):
+    item = report[it]
+    item['ws'].append(z_.detach().cpu() * lr_gain_z)
+    if z0_ is not None:
+        item['z0'].append(z0_.detach().cpu())
+    item['R'].append(R_.detach().cpu())
+    item['s'].append(s_.detach().cpu())
+    item['t2'].append(t2_.detach().cpu())
+
+    # Compute metrics for report
+    cam, focal = pose_utils.pose_to_matrix(
+        z0_.detach() if z0_ is not None else None,
+        t2_.detach(),
+        s_.detach(),
+        F.normalize(R_.detach(), dim=-1),
+        camera_flipped=dataset_config['camera_flipped'])
+    rgb_predicted, _, acc_predicted, normals_predicted, semantics_predicted, extra_model_outputs = model_to_call(
+        cam,
+        focal,
+        target_center_fid,
+        target_bbox_fid,
+        z_.detach() * lr_gain_z,
+        use_ema=True,
+        # compute_normals=args.use_sdf and idx == 0,
+        compute_normals=args.use_sdf,
+        compute_semantics=args.attention_values > 0,
+        force_no_cam_grad=True,
+        extra_model_outputs=['attention_values']
+        if args.attention_values > 0 else [],
+        extra_model_inputs={
+            k: v.detach() for k, v in extra_model_inputs.items()
+        },
+    )
+
+    rgb_predicted_perm = rgb_predicted.detach().permute(0, 3, 1,
+                                                        2).clamp_(
+        -1, 1)
+    target_perm = target_img_fid_.permute(0, 3, 1, 2)
+
+    if export_sample:
+        with torch.no_grad():
+            demo_img = target_perm[:, :3]
+            if use_pose_regressor and target_mask is not None:
+                coords_img = (
+                        target_coords.permute(0, 3, 1, 2)
+                        * target_mask.unsqueeze(1))
+                coords_img /= dataset_config['scene_range']
+                coords_img.clamp_(-1, 1)
+                if dataset_config['white_background']:
+                    coords_img += 1 - target_mask.unsqueeze(1)
+                demo_img = torch.cat((demo_img, coords_img), dim=3)
+            demo_img = torch.cat((demo_img, rgb_predicted_perm), dim=3)
+            if normals_predicted is not None:
+                demo_img = torch.cat(
+                    (demo_img, normals_predicted.permute(0, 3, 1, 2)),
+                    dim=3)
+
+            # Move the saving code before
+            utils.mkdir(out_dir)
+            out_fname = f'demo_obj{obj_idx}_{it}it.png'
+            out_path = os.path.join(out_dir, out_fname)
+            print('Saving demo output to', out_path)
+            torchvision.utils.save_image(demo_img / 2 + 0.5,
+                                         out_path,
+                                         nrow=1,
+                                         padding=0)
+    # item['psnr'].append(
+    #     metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
+    #                  target_perm[:, :3] / 2 + 0.5,
+    #                  reduction='none').cpu())
+    # item['ssim'].append(
+    #     metrics.ssim(rgb_predicted_perm[:, :3] / 2 + 0.5,
+    #                  target_perm[:, :3] / 2 + 0.5,
+    #                  reduction='none').cpu())
+    # if dataset_config['has_mask']:
+    #     item['iou'].append(
+    #         metrics.iou(acc_predicted,
+    #                     target_perm[:, 3],
+    #                     reduction='none').cpu())
+    # item['lpips'].append(
+    #     loss_fn_lpips(rgb_predicted_perm[:, :3],
+    #                   target_perm[:, :3],
+    #                   normalize=False).flatten().cpu())
+    # if not args.inv_export_demo_sample:
+    #     item['inception_activations_front'].append(
+    #         torch.FloatTensor(
+    #             fid.forward_inception_batch(
+    #                 inception_net,
+    #                 rgb_predicted_perm[:, :3] / 2 + 0.5)))
+    # if not (args.dataset == 'p3d_car' and use_testset):
+    #     # Ground-truth poses are not available on P3D Car (test set)
+    #     item['rot_error'].append(
+    #         pose_utils.rotation_matrix_distance(cam, gt_cam2world_mat))
+    #
+    # if writer is not None and idx == 0:
+    #     if it == checkpoint_steps[0]:
+    #         writer.add_images(f'img/ref',
+    #                           target_perm[:, :3].cpu() / 2 + 0.5, i)
+    #     writer.add_images('img/recon_front',
+    #                       rgb_predicted_perm.cpu() / 2 + 0.5, it)
+    #     writer.add_images('img/mask_front',
+    #                       acc_predicted.cpu().unsqueeze(1).clamp(0, 1),
+    #                       it)
+    #     if normals_predicted is not None:
+    #         writer.add_images(
+    #             'img/normals_front',
+    #             normals_predicted.cpu().permute(0, 3, 1, 2) / 2 + 0.5,
+    #             it)
+    #     if semantics_predicted is not None:
+    #         writer.add_images(
+    #             'img/semantics_front',
+    #             (semantics_predicted @ color_palette).cpu().permute(
+    #                 0, 3, 1, 2) / 2 + 0.5, it)
+    #
+    # # Test with random poses
+    # rgb_predicted, _, _, normals_predicted, semantics_predicted, _ = model_to_call(
+    #     target_tform_cam2world_perm,
+    #     target_focal_perm,
+    #     target_center_perm,
+    #     target_bbox_perm,
+    #     z_.detach() * lr_gain_z,
+    #     use_ema=True,
+    #     compute_normals=args.use_sdf and idx == 0,
+    #     compute_semantics=args.attention_values > 0 and idx == 0,
+    #     force_no_cam_grad=True,
+    #     extra_model_inputs={
+    #         k: v.detach() for k, v in extra_model_inputs.items()
+    #     },
+    # )
+    # rgb_predicted_perm = rgb_predicted.detach().permute(0, 3, 1,
+    #                                                     2).clamp(-1, 1)
+    # if export_sample:
+    #     with torch.no_grad():
+    #         demo_img = torch.cat((demo_img, rgb_predicted_perm), dim=3)
+    #         if normals_predicted is not None:
+    #             demo_img = torch.cat(
+    #                 (demo_img, normals_predicted.permute(0, 3, 1, 2)),
+    #                 dim=3)
+    #         out_dir = 'outputs'
+    #         utils.mkdir(out_dir)
+    #         if args.inv_manual_input_path:
+    #             out_fname = f'demo_manual_{args.dataset}_{it}it.png'
+    #         else:
+    #             out_fname = f'sample_{args.dataset}_{it}it.png'
+    #         out_path = os.path.join(out_dir, out_fname)
+    #         print('Saving demo output to', out_path)
+    #         torchvision.utils.save_image(demo_img / 2 + 0.5,
+    #                                      out_path,
+    #                                      nrow=1,
+    #                                      padding=0)
+    # if views_per_object > 1:
+    #     target_perm_random = target_img_fid_random_.permute(0, 3, 1, 2)
+    #     item['psnr_random'].append(
+    #         metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
+    #                      target_perm_random[:, :3] / 2 + 0.5,
+    #                      reduction='none').cpu())
+    #     item['ssim_random'].append(
+    #         metrics.ssim(rgb_predicted_perm[:, :3] / 2 + 0.5,
+    #                      target_perm_random[:, :3] / 2 + 0.5,
+    #                      reduction='none').cpu())
+    #     item['lpips_random'].append(
+    #         loss_fn_lpips(rgb_predicted_perm[:, :3],
+    #                       target_perm_random[:, :3],
+    #                       normalize=False).flatten().cpu())
+    # if not args.inv_export_demo_sample:
+    #     item['inception_activations_random'].append(
+    #         torch.FloatTensor(
+    #             fid.forward_inception_batch(
+    #                 inception_net,
+    #                 rgb_predicted_perm[:, :3] / 2 + 0.5)))
+    # if writer is not None and idx == 0:
+    #     writer.add_images('img/recon_random',
+    #                       rgb_predicted_perm.cpu() / 2 + 0.5, it)
+    #     writer.add_images('img/mask_random',
+    #                       acc_predicted.cpu().unsqueeze(1).clamp(0, 1),
+    #                       it)
+    #     if normals_predicted is not None:
+    #         writer.add_images(
+    #             'img/normals_random',
+    #             normals_predicted.cpu().permute(0, 3, 1, 2) / 2 + 0.5,
+    #             it)
+    #     if semantics_predicted is not None:
+    #         writer.add_images(
+    #             'img/semantics_random',
+    #             (semantics_predicted @ color_palette).cpu().permute(
+    #                 0, 3, 1, 2) / 2 + 0.5, it)
 
 
 if __name__ == '__main__':
-    tgt_img_name = 'n015-2018-10-08-15-36-50+0800__CAM_FRONT__1538984240912467.jpg'
+    # tgt_img_name = 'n015-2018-10-08-15-36-50+0800__CAM_FRONT__1538984240912467.jpg'
+    # tgt_img_name = 'n008-2018-08-27-11-48-51-0400__CAM_FRONT_RIGHT__1535385099370482.jpg'
+    tgt_img_name = 'n008-2018-08-01-15-16-36-0400__CAM_FRONT__1533151609912404.jpg'
     gpu = 0
 
-    save_dir = os.path.join('outputs', tgt_img_name[:-4])
-    if not os.path.exists(save_dir):
-        os.mkdir(save_dir)
+    out_dir = os.path.join('outputs', tgt_img_name[:-4])
+    if not os.path.exists(out_dir):
+        os.mkdir(out_dir)
 
     # load data
     nusc_data_dir = '/mnt/SSD4TB/Datasets/NuScenes/v1.0-mini-full'
@@ -781,7 +894,7 @@ if __name__ == '__main__':
         nusc_seg_dir,
         nusc_version,
         split='val',
-        debug=True,
+        debug=False,
     )
 
     # get predicted objects and masks associated with each image
@@ -790,11 +903,16 @@ if __name__ == '__main__':
     """
         got the minimal viable portion to model to run
     """
-    scene_range = 1.4  # TODO: based on p3d training split, is the trained model overfitted to it?
-    camera_flipped = True  # TODO: based on p3d training split, is the trained model overfitted to it?
+
+    # scene_range = 1.4  # TODO: based on p3d training split, is the trained model overfitted to it?
+    # camera_flipped = True  # TODO: based on p3d training split, is the trained model overfitted to it?
 
     args = arguments.parse_args()
 
+    args.gpus = 1 if args.gpus >= 1 else 0
+    args.inv_export_demo_sample = True
+    if args.inv_export_demo_sample:
+        args.run_inversion = True
     gpu_ids = list(range(args.gpus))
 
     if args.gpus > 0 and torch.cuda.is_available():
@@ -890,7 +1008,7 @@ if __name__ == '__main__':
     else:
         model = create_model(args, device)
 
-    model_ema = create_model()
+    model_ema = create_model(args, device)
     model_ema.eval()
     model_ema.requires_grad_(False)
     if model is not None:
@@ -969,7 +1087,7 @@ if __name__ == '__main__':
         """
             load pretrained coord_regressor
         """
-        with utils.open_file('coords_checkpoints/g_p3d_car_pretrained' + '_latest.pth',
+        with utils.open_file('coords_checkpoints/g_p3d_car_pretrained/c_it300000_latest.pth',
                              'rb') as f:
             checkpoint = torch.load(f, map_location='cpu')
 
@@ -1032,24 +1150,26 @@ if __name__ == '__main__':
             z_avg = model_ema.mapping_network.get_average_w()
 
         print('Running...')
-        num_samples = manual_image['bbox'].shape[0]
+        num_samples = manual_image['bboxes'].shape[0]
         # deal with each detected object in the image
-        for idx, bbox in enumerate(manual_image['bbox']):
+        for idx, bbox in enumerate(manual_image['bboxes']):
             t1 = time.time()
-            test_bs = batch_size
 
             # report_checkpoint_path = os.path.join(report_dir_effective,
             #                                       'report_checkpoint.pth')
 
-            target_img = manual_image['image'][idx]
+            target_img = manual_image['images'][idx:idx+1].to(device)
             # target_img = test_split[
             #     target_img_idx].images  # Target for optimization (always cropped)
-            # target_img_fid_ = target_img  # Target for evaluation (front view -- always cropped)
+            target_img_fid_ = target_img  # Target for evaluation (front view -- always cropped)
             # target_tform_cam2world = test_split[target_img_idx].tform_cam2world
             # target_focal = test_split[target_img_idx].focal_length
             target_center = None  # this is for the rendering range in the given image, in pixels. None for full patch
             target_bbox = None  # this is for the rendering range in the given image, in pixels. None for full patch
-            #
+
+            target_center_fid = None
+            target_bbox_fid = None
+
             # if use_pose_regressor and 'p3d' in args.dataset:
             #     # Use views from training set (as test pose distribution is not available)
             #     target_center_fid = None
@@ -1064,7 +1184,7 @@ if __name__ == '__main__':
             #     target_bbox_perm = train_eval_split[target_img_idx_perm].bbox
             #
             # gt_cam2world_mat = target_tform_cam2world.clone()
-            z_ = z_avg.clone().expand(test_bs, -1, -1).contiguous()
+            z_ = z_avg.clone().expand(1, -1, -1).contiguous()
 
             # TODO: estimated cam2world pose: the object pose in a virtual camera centered at the patch center
             with torch.no_grad():
@@ -1093,7 +1213,7 @@ if __name__ == '__main__':
             z0_, t2_, s_, R_ = pose_utils.matrix_to_pose(
                 target_tform_cam2world,
                 target_focal,
-                camera_flipped=camera_flipped)
+                camera_flipped=dataset_config['camera_flipped'])
 
             if not no_optimize_pose:
                 t2_.requires_grad_()
@@ -1136,7 +1256,7 @@ if __name__ == '__main__':
                     t2_,
                     s_,
                     F.normalize(R_, dim=-1),
-                    camera_flipped=camera_flipped)
+                    camera_flipped=dataset_config['camera_flipped'])
 
                 # TODO: seems to support perspective camera K as well
                 loss, psnr_monitor, lpips_monitor, rgb_predicted = model_to_call(
@@ -1162,13 +1282,13 @@ if __name__ == '__main__':
                 loss = loss.sum()
                 psnr_monitor = psnr_monitor.mean()
                 lpips_monitor = lpips_monitor.mean()
-                if writer is not None and idx == 0:
-                    writer.add_scalar('monitor_b0/psnr', psnr_monitor.item(), it)
-                    writer.add_scalar('monitor_b0/lpips', lpips_monitor.item(), it)
-                    rot_error = pose_utils.rotation_matrix_distance(
-                        cam, gt_cam2world_mat).mean().item()
-                    rot_errors.append(rot_error)
-                    writer.add_scalar('monitor_b0/rot_error', rot_error, it)
+                # if writer is not None and idx == 0:
+                #     writer.add_scalar('monitor_b0/psnr', psnr_monitor.item(), it)
+                #     writer.add_scalar('monitor_b0/lpips', lpips_monitor.item(), it)
+                #     rot_error = pose_utils.rotation_matrix_distance(
+                #         cam, gt_cam2world_mat).mean().item()
+                #     rot_errors.append(rot_error)
+                #     writer.add_scalar('monitor_b0/rot_error', rot_error, it)
 
                 if args.use_sdf and normal_map is not None:
                     rgb_predicted = torch.cat(
@@ -1189,20 +1309,19 @@ if __name__ == '__main__':
 
                 if args.inv_export_demo_sample:
                     print(it + 1, '/', max(checkpoint_steps))
-                # if it + 1 in report:
-                #     evaluate_inversion(it + 1,
-                #                        (args.inv_export_demo_sample
-                #                         and it + 1 == max(checkpoint_steps)))
+                if it + 1 in report:
+                    evaluate_inversion(idx+1, it + 1, out_dir,
+                                       target_img_fid_, target_center_fid, target_bbox_fid,
+                                       (args.inv_export_demo_sample and it + 1 == max(checkpoint_steps)))
 
             t2 = time.time()
-            idx += test_bs
             print(
-                f'[{idx}/{num_samples}] Finished batch in {t2 - t1} s ({(t2 - t1) / test_bs} s/img)'
+                f'[{idx+1}/{num_samples}] Finished batch in {t2 - t1} s ({(t2 - t1)} s/img)'
             )
 
-            if args.inv_export_demo_sample:
-                # Evaluate (and save) only the first batch, then exit
-                break
+            # if args.inv_export_demo_sample:
+            #     # Evaluate (and save) only the first batch, then exit
+            #     break
 
             # if idx % 512 == 0:
             #     # Save report checkpoint
