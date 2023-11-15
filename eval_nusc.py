@@ -4,6 +4,8 @@ import torch
 import torch.nn.functional as F
 import torchvision
 import time
+import random
+from scipy.spatial.transform import Rotation as R
 from datetime import date, datetime
 import sys
 import math
@@ -474,6 +476,7 @@ def optimize_iter(module, rgb_predicted, acc_predicted,
 
 def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid, target_bbox_fid, export_sample=False, inception_net=None):
     item = report[it]
+    # TODO: modify if necessary. Not we assume z_, z0_, R_, s_, t2_ in right number before calling this function
     item['ws'].append(z_.detach().cpu() * lr_gain_z)
     if z0_ is not None:
         item['z0'].append(z0_.detach().cpu())
@@ -529,15 +532,6 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
                     (demo_img, normals_predicted.permute(0, 3, 1, 2)),
                     dim=3)
 
-            # Move the saving code before
-            utils.mkdir(out_dir)
-            out_fname = f'demo_obj{obj_idx}_{it}it.png'
-            out_path = os.path.join(out_dir, out_fname)
-            print('Saving demo output to', out_path)
-            torchvision.utils.save_image(demo_img / 2 + 0.5,
-                                         out_path,
-                                         nrow=1,
-                                         padding=0)
     item['psnr'].append(
         metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
                      target_perm[:, :3] / 2 + 0.5,
@@ -565,7 +559,7 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
         # Ground-truth poses are not available on P3D Car (test set)
     item['rot_error'].append(
         pose_utils.rotation_matrix_distance(cam, gt_cam2world_mat))
-    print(f'rot error: {pose_utils.rotation_matrix_distance(cam, gt_cam2world_mat)}')
+    print(f'rot error {it}it: {pose_utils.rotation_matrix_distance(cam, gt_cam2world_mat).item()}')
     #
     # if writer is not None and idx == 0:
     #     if it == checkpoint_steps[0]:
@@ -587,42 +581,54 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
     #             (semantics_predicted @ color_palette).cpu().permute(
     #                 0, 3, 1, 2) / 2 + 0.5, it)
     #
-    # # Test with random poses
-    # rgb_predicted, _, _, normals_predicted, semantics_predicted, _ = model_to_call(
-    #     target_tform_cam2world_perm,
-    #     target_focal_perm,
-    #     target_center_perm,
-    #     target_bbox_perm,
-    #     z_.detach() * lr_gain_z,
-    #     use_ema=True,
-    #     compute_normals=args.use_sdf and idx == 0,
-    #     compute_semantics=args.attention_values > 0 and idx == 0,
-    #     force_no_cam_grad=True,
-    #     extra_model_inputs={
-    #         k: v.detach() for k, v in extra_model_inputs.items()
-    #     },
-    # )
-    # rgb_predicted_perm = rgb_predicted.detach().permute(0, 3, 1,
-    #                                                     2).clamp(-1, 1)
-    # if export_sample:
-    #     with torch.no_grad():
-    #         demo_img = torch.cat((demo_img, rgb_predicted_perm), dim=3)
-    #         if normals_predicted is not None:
-    #             demo_img = torch.cat(
-    #                 (demo_img, normals_predicted.permute(0, 3, 1, 2)),
-    #                 dim=3)
-    #         out_dir = 'outputs'
-    #         utils.mkdir(out_dir)
-    #         if args.inv_manual_input_path:
-    #             out_fname = f'demo_manual_{args.dataset}_{it}it.png'
-    #         else:
-    #             out_fname = f'sample_{args.dataset}_{it}it.png'
-    #         out_path = os.path.join(out_dir, out_fname)
-    #         print('Saving demo output to', out_path)
-    #         torchvision.utils.save_image(demo_img / 2 + 0.5,
-    #                                      out_path,
-    #                                      nrow=1,
-    #                                      padding=0)
+    # Modified -- convert back to object pose the change the orientation only, so to keep the object still image center
+    angle_lim = np.pi * 0.2
+    rotvec_rand = [random.uniform(-angle_lim, angle_lim),
+                   random.uniform(-angle_lim, angle_lim),
+                   random.uniform(-angle_lim, angle_lim)]
+    R_rand = R.from_rotvec(rotvec_rand).as_matrix()
+    target_tform_cam2world = cam.clone()
+    target_tform_world2cam_perm = pose_utils.invert_space(target_tform_cam2world)
+    target_tform_world2cam_perm[0, :3, :3] = target_tform_world2cam_perm[0, :3, :3] @ torch.FloatTensor(R_rand).to(device)
+    target_tform_cam2world_perm = pose_utils.invert_space(target_tform_world2cam_perm)
+
+    target_focal_perm = focal * random.uniform(0.7, 2)
+    target_center_perm = None
+    target_bbox_perm = None
+
+    rgb_predicted, _, _, normals_predicted, semantics_predicted, _ = model_to_call(
+        target_tform_cam2world_perm,
+        target_focal_perm,
+        target_center_perm,
+        target_bbox_perm,
+        z_.detach() * lr_gain_z,
+        use_ema=True,
+        compute_normals=args.use_sdf,
+        compute_semantics=args.attention_values > 0 and idx == 0,
+        force_no_cam_grad=True,
+        extra_model_inputs={
+            k: v.detach() for k, v in extra_model_inputs.items()
+        },
+    )
+    rgb_predicted_perm = rgb_predicted.detach().permute(0, 3, 1,
+                                                        2).clamp(-1, 1)
+    if export_sample:
+        with torch.no_grad():
+            demo_img = torch.cat((demo_img, rgb_predicted_perm), dim=3)
+            if normals_predicted is not None:
+                demo_img = torch.cat(
+                    (demo_img, normals_predicted.permute(0, 3, 1, 2)),
+                    dim=3)
+
+            # Move the saving code before
+            utils.mkdir(out_dir)
+            out_fname = f'demo_obj{obj_idx}_{it}it.png'
+            out_path = os.path.join(out_dir, out_fname)
+            print('Saving demo output to', out_path)
+            torchvision.utils.save_image(demo_img / 2 + 0.5,
+                                         out_path,
+                                         nrow=1,
+                                         padding=0)
     # if views_per_object > 1:
     #     target_perm_random = target_img_fid_random_.permute(0, 3, 1, 2)
     #     item['psnr_random'].append(
@@ -927,13 +933,11 @@ if __name__ == '__main__':
     with torch.no_grad():
         z_avg = model_ema.mapping_network.get_average_w()
 
+    report_checkpoint_path = os.path.join(out_dir, 'report_checkpoint.pth')
     print('Running...')
     # deal with each detected object in the image
     for idx, batch_data in enumerate(nusc_loader):
         t1 = time.time()
-
-        # report_checkpoint_path = os.path.join(report_dir_effective,
-        #                                       'report_checkpoint.pth')
 
         target_img = batch_data['img_batch'].to(device)
         # target_img = test_split[
@@ -1033,10 +1037,10 @@ if __name__ == '__main__':
         rot_errors = []
         niter = max(checkpoint_steps)
 
-        # if 0 in checkpoint_steps:
-        #     evaluate_inversion(0,
-        #                        (args.inv_export_demo_sample
-        #                         and max(checkpoint_steps) == 0))
+        if 0 in checkpoint_steps:
+            evaluate_inversion(idx, 0, out_dir, target_img_fid_, target_center_fid, target_bbox_fid,
+                               (args.inv_export_demo_sample
+                                and max(checkpoint_steps) == 0))
 
         for it in range(niter):
             cam, focal = pose_utils.pose_to_matrix(
@@ -1098,7 +1102,7 @@ if __name__ == '__main__':
             # if args.inv_export_demo_sample:
             #     print(it + 1, '/', max(checkpoint_steps))
             if it + 1 in report:
-                evaluate_inversion(idx+1, it + 1, out_dir,
+                evaluate_inversion(idx + 1, it + 1, out_dir,
                                    target_img_fid_, target_center_fid, target_bbox_fid,
                                    (args.inv_export_demo_sample and it + 1 == max(checkpoint_steps)))
 
@@ -1107,15 +1111,39 @@ if __name__ == '__main__':
             f'[{idx+1}/{len(nusc_loader)}] Finished batch in {t2 - t1} s ({(t2 - t1)} s/img)'
         )
 
-        # if args.inv_export_demo_sample:
-        #     # Evaluate (and save) only the first batch, then exit
-        #     break
+        if (idx+1) % 10 == 0:
+            # Save report checkpoint
+            with utils.open_file(report_checkpoint_path, 'wb') as f:
+                torch.save({
+                    'report': report,
+                    'idx': idx,
+                }, f)
+            print('====================================================')
+            for it in checkpoint_steps:
+                avg_R_err = torch.mean(torch.stack(report[it]['rot_error']))
+                print(f'Average Rotation Error at {it}it: {avg_R_err}')
+                avg_psnr = torch.mean(torch.stack(report[it]['psnr']))
+                print(f'Average psnr at {it}it: {avg_psnr}')
+                avg_ssim = torch.mean(torch.stack(report[it]['ssim']))
+                print(f'Average ssim at {it}it: {avg_ssim}')
+                avg_lpips = torch.mean(torch.stack(report[it]['lpips']))
+                print(f'Average lpips at {it}it: {avg_lpips}')
+                print('====================================================')
 
-        # if idx % 512 == 0:
-        #     # Save report checkpoint
-        #     with utils.open_file(report_checkpoint_path, 'wb') as f:
-        #         torch.save({
-        #             'report': report,
-        #             'idx': idx,
-        #             'test_bs': test_bs,
-        #         }, f)
+    # final save report
+    with utils.open_file(report_checkpoint_path, 'wb') as f:
+        torch.save({
+            'report': report,
+            'idx': len(nusc_loader),
+        }, f)
+    print('====================================================')
+    for it in checkpoint_steps:
+        avg_R_err = torch.mean(torch.stack(report[it]['rot_error']))
+        print(f'Average Rotation Error at {it}it: {avg_R_err}')
+        avg_psnr = torch.mean(torch.stack(report[it]['psnr']))
+        print(f'Average psnr at {it}it: {avg_psnr}')
+        avg_ssim = torch.mean(torch.stack(report[it]['ssim']))
+        print(f'Average ssim at {it}it: {avg_ssim}')
+        avg_lpips = torch.mean(torch.stack(report[it]['lpips']))
+        print(f'Average lpips at {it}it: {avg_lpips}')
+        print('====================================================')
