@@ -538,23 +538,23 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
                                          out_path,
                                          nrow=1,
                                          padding=0)
-    # item['psnr'].append(
-    #     metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
-    #                  target_perm[:, :3] / 2 + 0.5,
-    #                  reduction='none').cpu())
-    # item['ssim'].append(
-    #     metrics.ssim(rgb_predicted_perm[:, :3] / 2 + 0.5,
-    #                  target_perm[:, :3] / 2 + 0.5,
-    #                  reduction='none').cpu())
+    item['psnr'].append(
+        metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
+                     target_perm[:, :3] / 2 + 0.5,
+                     reduction='none').cpu())
+    item['ssim'].append(
+        metrics.ssim(rgb_predicted_perm[:, :3] / 2 + 0.5,
+                     target_perm[:, :3] / 2 + 0.5,
+                     reduction='none').cpu())
     # if dataset_config['has_mask']:
     #     item['iou'].append(
     #         metrics.iou(acc_predicted,
     #                     target_perm[:, 3],
     #                     reduction='none').cpu())
-    # item['lpips'].append(
-    #     loss_fn_lpips(rgb_predicted_perm[:, :3],
-    #                   target_perm[:, :3],
-    #                   normalize=False).flatten().cpu())
+    item['lpips'].append(
+        loss_fn_lpips(rgb_predicted_perm[:, :3],
+                      target_perm[:, :3],
+                      normalize=False).flatten().cpu())
     # if not args.inv_export_demo_sample:
     #     item['inception_activations_front'].append(
     #         torch.FloatTensor(
@@ -562,9 +562,10 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
     #                 inception_net,
     #                 rgb_predicted_perm[:, :3] / 2 + 0.5)))
     # if not (args.dataset == 'p3d_car' and use_testset):
-    #     # Ground-truth poses are not available on P3D Car (test set)
-    #     item['rot_error'].append(
-    #         pose_utils.rotation_matrix_distance(cam, gt_cam2world_mat))
+        # Ground-truth poses are not available on P3D Car (test set)
+    item['rot_error'].append(
+        pose_utils.rotation_matrix_distance(cam, gt_cam2world_mat))
+    print(f'rot error: {pose_utils.rotation_matrix_distance(cam, gt_cam2world_mat)}')
     #
     # if writer is not None and idx == 0:
     #     if it == checkpoint_steps[0]:
@@ -661,7 +662,8 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
 
 
 if __name__ == '__main__':
-    exp_name = 'nusc_' + datetime.now().strftime('_%Y_%m_%d_%H_%M_%S')
+    # exp_name = 'nusc_' + datetime.now().strftime('_%Y_%m_%d_%H_%M_%S')
+    exp_name = 'nusc_' + date.today().strftime('_%Y_%m_%d')
     out_dir = os.path.join('outputs', exp_name)
     if not os.path.exists(out_dir):
         os.mkdir(out_dir)
@@ -824,287 +826,296 @@ if __name__ == '__main__':
         else:
             i = args.iterations
 
-    if args.run_inversion:
-        # Global config
-        use_testset = args.inv_use_testset
-        use_pose_regressor = True
-        use_latent_regressor = True
-        loss_to_use = args.inv_loss
-        lr_gain_z = args.inv_gain_z
-        inv_no_split = args.inv_no_split
-        no_optimize_pose = args.inv_no_optimize_pose
+    # Global config
+    use_testset = args.inv_use_testset
+    use_pose_regressor = True
+    use_latent_regressor = True
+    loss_to_use = args.inv_loss
+    lr_gain_z = args.inv_gain_z
+    inv_no_split = args.inv_no_split
+    no_optimize_pose = args.inv_no_optimize_pose
 
-        # if args.inv_manual_input_path:
-        #     # Demo inference on manually supplied image
-        batch_size = 1
-        # else:
-        #     batch_size = args.batch_size // 4 * len(gpu_ids)
+    # if args.inv_manual_input_path:
+    #     # Demo inference on manually supplied image
+    batch_size = 1
+    # else:
+    #     batch_size = args.batch_size // 4 * len(gpu_ids)
 
-        # if args.dataset == 'p3d_car' and use_testset:
-        #     split_str = 'imagenettest' if args.inv_use_imagenet_testset else 'test'
-        # else:
-        #     split_str = 'test' if use_testset else 'train'
-        # if args.inv_use_separate:
-        #     mode_str = '_separate'
-        # else:
-        #     mode_str = '_joint'
-        # if no_optimize_pose:
-        #     mode_str += '_nooptpose'
-        # else:
-        #     mode_str += '_optpose'
-        # w_split_str = 'nosplit' if inv_no_split else 'split'
-        # cfg_xid = f'_{args.xid}' if len(args.xid) > 0 else ''
-        # cfg_string = f'i{cfg_xid}_{split_str}{mode_str}_{loss_to_use}_gain{lr_gain_z}_{w_split_str}'
-        # cfg_string += f'_it{resume_from["iteration"]}'
+    # if args.dataset == 'p3d_car' and use_testset:
+    #     split_str = 'imagenettest' if args.inv_use_imagenet_testset else 'test'
+    # else:
+    #     split_str = 'test' if use_testset else 'train'
+    # if args.inv_use_separate:
+    #     mode_str = '_separate'
+    # else:
+    #     mode_str = '_joint'
+    # if no_optimize_pose:
+    #     mode_str += '_nooptpose'
+    # else:
+    #     mode_str += '_optpose'
+    # w_split_str = 'nosplit' if inv_no_split else 'split'
+    # cfg_xid = f'_{args.xid}' if len(args.xid) > 0 else ''
+    # cfg_string = f'i{cfg_xid}_{split_str}{mode_str}_{loss_to_use}_gain{lr_gain_z}_{w_split_str}'
+    # cfg_string += f'_it{resume_from["iteration"]}'
+    #
+    # print('Config string:', cfg_string)
+    #
+    # report_dir_effective = os.path.join(report_dir, args.resume_from,
+    #                                     cfg_string)
+    # print('Saving report in', report_dir_effective)
+    # utils.mkdir(report_dir_effective)
+
+    """
+        load pretrained coord_regressor
+    """
+    with utils.open_file('coords_checkpoints/g_p3d_car_pretrained/c_it300000_latest.pth',
+                         'rb') as f:
+        checkpoint = torch.load(f, map_location='cpu')
+
+    regress_pose = True
+    regress_latent = True
+    regress_separate = args.inv_use_separate
+
+    coord_regressor = encoder.BootstrapEncoder(
+        args.latent_dim,
+        pose_regressor=regress_pose,
+        latent_regressor=regress_latent,
+        separate_backbones=regress_separate,
+        pretrained_model_path=os.path.join(args.root_path,
+                                           'coords_checkpoints'),
+        pretrained=checkpoint is None,
+    ).to(device)
+
+    coord_regressor = nn.DataParallel(coord_regressor, gpu_ids)
+    coord_regressor.requires_grad_(True)
+
+    # Resume if cache is available
+    if checkpoint is not None:
+        coord_regressor.load_state_dict(checkpoint['model_coord'])
+
+
+    """
+        other initial parameters
+    """
+
+    # if use_pose_regressor:
+    #     focal_guesses = pose_estimation.get_focal_guesses(
+    #         train_split.focal_length)
+
+    checkpoint_steps = [0, 30]
+
+    report = {
+        step: {
+            'ws': [],
+            'z0': [],
+            'R': [],
+            's': [],
+            't2': [],
+            'psnr': [],
+            'psnr_random': [],
+            'lpips': [],
+            'lpips_random': [],
+            'ssim': [],
+            'ssim_random': [],
+            'iou': [],
+            'rot_error': [],
+            'inception_activations_front': [],  # Front view
+            'inception_activations_random': [],  # Random view
+        } for step in checkpoint_steps
+    }
+
+    with torch.no_grad():
+        z_avg = model_ema.mapping_network.get_average_w()
+
+    print('Running...')
+    # deal with each detected object in the image
+    for idx, batch_data in enumerate(nusc_loader):
+        t1 = time.time()
+
+        # report_checkpoint_path = os.path.join(report_dir_effective,
+        #                                       'report_checkpoint.pth')
+
+        target_img = batch_data['img_batch'].to(device)
+        # target_img = test_split[
+        #     target_img_idx].images  # Target for optimization (always cropped)
+        target_img_fid_ = target_img  # Target for evaluation (front view -- always cropped)
+        # target_tform_cam2world = test_split[target_img_idx].tform_cam2world
+        # target_focal = test_split[target_img_idx].focal_length
+        target_center = None  # this is for the rendering range in the given image, in pixels. None for full patch
+        target_bbox = None  # this is for the rendering range in the given image, in pixels. None for full patch
+
+        target_center_fid = None
+        target_bbox_fid = None
+
+        # if use_pose_regressor and 'p3d' in args.dataset:
+        #     # Use views from training set (as test pose distribution is not available)
+        #     target_center_fid = None
+        #     target_bbox_fid = None
         #
-        # print('Config string:', cfg_string)
+        #     target_tform_cam2world_perm = train_eval_split[
+        #         target_img_idx_perm].tform_cam2world
+        #     target_focal_perm = train_eval_split[
+        #         target_img_idx_perm].focal_length
+        #     target_center_perm = train_eval_split[
+        #         target_img_idx_perm].center
+        #     target_bbox_perm = train_eval_split[target_img_idx_perm].bbox
         #
-        # report_dir_effective = os.path.join(report_dir, args.resume_from,
-        #                                     cfg_string)
-        # print('Saving report in', report_dir_effective)
-        # utils.mkdir(report_dir_effective)
+        # gt_cam2world_mat = target_tform_cam2world.clone()
+        gt_cam2world_mat = torch.eye(4).unsqueeze(0)
+        gt_cam2world_mat[0, :3, :] = batch_data['cam_poses']
+        nusc2shapenet = torch.FloatTensor([[0, 1, 0, 0],
+                                           [-1, 0, 0, 0],
+                                           [0, 0, 1, 0],
+                                           [0, 0, 0, 1]])
+        gt_cam2world_mat[0] = nusc2shapenet @ gt_cam2world_mat[0]
+        if dataset_config['camera_flipped']:
+            gt_cam2world_mat[:, :3, 1:] *= -1
 
-        """
-            load pretrained coord_regressor
-        """
-        with utils.open_file('coords_checkpoints/g_p3d_car_pretrained/c_it300000_latest.pth',
-                             'rb') as f:
-            checkpoint = torch.load(f, map_location='cpu')
+        gt_cam2world_mat = gt_cam2world_mat.to(device)
+        z_ = z_avg.clone().expand(1, -1, -1).contiguous()
 
-        regress_pose = True
-        regress_latent = True
-        regress_separate = args.inv_use_separate
-
-        coord_regressor = encoder.BootstrapEncoder(
-            args.latent_dim,
-            pose_regressor=regress_pose,
-            latent_regressor=regress_latent,
-            separate_backbones=regress_separate,
-            pretrained_model_path=os.path.join(args.root_path,
-                                               'coords_checkpoints'),
-            pretrained=checkpoint is None,
-        ).to(device)
-
-        coord_regressor = nn.DataParallel(coord_regressor, gpu_ids)
-        coord_regressor.requires_grad_(True)
-
-        # Resume if cache is available
-        if checkpoint is not None:
-            coord_regressor.load_state_dict(checkpoint['model_coord'])
-
-
-        """
-            other initial parameters
-        """
-
-        # if use_pose_regressor:
-        #     focal_guesses = pose_estimation.get_focal_guesses(
-        #         train_split.focal_length)
-
-        checkpoint_steps = [0, 30]
-
-        report = {
-            step: {
-                'ws': [],
-                'z0': [],
-                'R': [],
-                's': [],
-                't2': [],
-                'psnr': [],
-                'psnr_random': [],
-                'lpips': [],
-                'lpips_random': [],
-                'ssim': [],
-                'ssim_random': [],
-                'iou': [],
-                'rot_error': [],
-                'inception_activations_front': [],  # Front view
-                'inception_activations_random': [],  # Random view
-            } for step in checkpoint_steps
-        }
-
+        # TODO: estimated cam2world pose: the object pose in a virtual camera centered at the patch center
         with torch.no_grad():
-            z_avg = model_ema.mapping_network.get_average_w()
+            coord_regressor_img = target_img[..., :3].permute(0, 3, 1, 2)
 
-        print('Running...')
-        # deal with each detected object in the image
-        for idx, batch_data in enumerate(nusc_loader):
-            print(f'num obj: {idx + 1}/{len(nusc_loader)}')
-            t1 = time.time()
+            target_coords, target_mask, target_w = coord_regressor.module(
+                coord_regressor_img)
 
-            # report_checkpoint_path = os.path.join(report_dir_effective,
-            #                                       'report_checkpoint.pth')
+            if use_pose_regressor:
+                assert target_coords is not None
+                estimated_cam2world_mat, estimated_focal, _ = estimate_poses_batch(
+                    target_coords, target_mask, focal_guesses)
+                target_tform_cam2world = estimated_cam2world_mat
+                target_focal = estimated_focal
+            if use_latent_regressor:
+                assert target_w is not None
+                z_.data[:] = target_w
 
-            target_img = batch_data['img_batch'].to(device)
-            # target_img = test_split[
-            #     target_img_idx].images  # Target for optimization (always cropped)
-            target_img_fid_ = target_img  # Target for evaluation (front view -- always cropped)
-            # target_tform_cam2world = test_split[target_img_idx].tform_cam2world
-            # target_focal = test_split[target_img_idx].focal_length
-            target_center = None  # this is for the rendering range in the given image, in pixels. None for full patch
-            target_bbox = None  # this is for the rendering range in the given image, in pixels. None for full patch
+        if inv_no_split:
+            z_ = z_.mean(dim=1, keepdim=True)
 
-            target_center_fid = None
-            target_bbox_fid = None
+        z_ /= lr_gain_z
+        z_ = z_.requires_grad_()
 
-            # if use_pose_regressor and 'p3d' in args.dataset:
-            #     # Use views from training set (as test pose distribution is not available)
-            #     target_center_fid = None
-            #     target_bbox_fid = None
-            #
-            #     target_tform_cam2world_perm = train_eval_split[
-            #         target_img_idx_perm].tform_cam2world
-            #     target_focal_perm = train_eval_split[
-            #         target_img_idx_perm].focal_length
-            #     target_center_perm = train_eval_split[
-            #         target_img_idx_perm].center
-            #     target_bbox_perm = train_eval_split[target_img_idx_perm].bbox
-            #
-            # gt_cam2world_mat = target_tform_cam2world.clone()
-            z_ = z_avg.clone().expand(1, -1, -1).contiguous()
+        # TODO: this pose representation is for optimization, will it work for actual camera?
+        z0_, t2_, s_, R_ = pose_utils.matrix_to_pose(
+            target_tform_cam2world,
+            target_focal,
+            camera_flipped=dataset_config['camera_flipped'])
 
-            # TODO: estimated cam2world pose: the object pose in a virtual camera centered at the patch center
-            with torch.no_grad():
-                coord_regressor_img = target_img[..., :3].permute(0, 3, 1, 2)
+        if not no_optimize_pose:
+            t2_.requires_grad_()
+            s_.requires_grad_()
+            R_.requires_grad_()
+        if z0_ is not None:
+            if not no_optimize_pose:
+                z0_.requires_grad_()
+            param_list = [z_, z0_, R_, s_, t2_]
+            param_names = ['z', 'f', 'R', 's', 't']
+        else:
+            param_list = [z_, R_, s_, t2_]
+            param_names = ['z', 'R', 's', 't']
+        if no_optimize_pose:
+            param_list = param_list[:1]
+            param_names = param_names[:1]
 
-                target_coords, target_mask, target_w = coord_regressor.module(
-                    coord_regressor_img)
+        extra_model_inputs = {}
+        optimizer = torch.optim.Adam(param_list, lr=2e-3, betas=(0.9, 0.95))
+        grad_norms = []
+        for _ in range(len(param_list)):
+            grad_norms.append([])
 
-                if use_pose_regressor:
-                    assert target_coords is not None
-                    estimated_cam2world_mat, estimated_focal, _ = estimate_poses_batch(
-                        target_coords, target_mask, focal_guesses)
-                    target_tform_cam2world = estimated_cam2world_mat
-                    target_focal = estimated_focal
-                if use_latent_regressor:
-                    assert target_w is not None
-                    z_.data[:] = target_w
+        model_to_call = parallel_model if z_.shape[
+                                              0] > 1 else parallel_model.module
 
-            if inv_no_split:
-                z_ = z_.mean(dim=1, keepdim=True)
+        psnrs = []
+        lpipss = []
+        rot_errors = []
+        niter = max(checkpoint_steps)
 
-            z_ /= lr_gain_z
-            z_ = z_.requires_grad_()
+        # if 0 in checkpoint_steps:
+        #     evaluate_inversion(0,
+        #                        (args.inv_export_demo_sample
+        #                         and max(checkpoint_steps) == 0))
 
-            # TODO: this pose representation is for optimization, will it work for actual camera?
-            z0_, t2_, s_, R_ = pose_utils.matrix_to_pose(
-                target_tform_cam2world,
-                target_focal,
+        for it in range(niter):
+            cam, focal = pose_utils.pose_to_matrix(
+                z0_,
+                t2_,
+                s_,
+                F.normalize(R_, dim=-1),
                 camera_flipped=dataset_config['camera_flipped'])
 
-            if not no_optimize_pose:
-                t2_.requires_grad_()
-                s_.requires_grad_()
-                R_.requires_grad_()
-            if z0_ is not None:
-                if not no_optimize_pose:
-                    z0_.requires_grad_()
-                param_list = [z_, z0_, R_, s_, t2_]
-                param_names = ['z', 'f', 'R', 's', 't']
-            else:
-                param_list = [z_, R_, s_, t2_]
-                param_names = ['z', 'R', 's', 't']
-            if no_optimize_pose:
-                param_list = param_list[:1]
-                param_names = param_names[:1]
-
-            extra_model_inputs = {}
-            optimizer = torch.optim.Adam(param_list, lr=2e-3, betas=(0.9, 0.95))
-            grad_norms = []
-            for _ in range(len(param_list)):
-                grad_norms.append([])
-
-            model_to_call = parallel_model if z_.shape[
-                                                  0] > 1 else parallel_model.module
-
-            psnrs = []
-            lpipss = []
-            rot_errors = []
-            niter = max(checkpoint_steps)
-
-            # if 0 in checkpoint_steps:
-            #     evaluate_inversion(0,
-            #                        (args.inv_export_demo_sample
-            #                         and max(checkpoint_steps) == 0))
-
-            for it in range(niter):
-                cam, focal = pose_utils.pose_to_matrix(
-                    z0_,
-                    t2_,
-                    s_,
-                    F.normalize(R_, dim=-1),
-                    camera_flipped=dataset_config['camera_flipped'])
-
-                # TODO: seems to support perspective camera K as well
-                loss, psnr_monitor, lpips_monitor, rgb_predicted = model_to_call(
-                    cam,
-                    focal,
-                    target_center,
-                    target_bbox,
-                    z_ * lr_gain_z,
-                    use_ema=True,
-                    ray_multiplier=1 if args.fine_sampling else 4,
-                    res_multiplier=1,
-                    compute_normals=False and args.use_sdf,
-                    force_no_cam_grad=no_optimize_pose,
-                    closure=optimize_iter,
-                    closure_params={
-                        'target_img': target_img,
-                        'cam': cam,
-                        'focal': focal
-                    },
-                    extra_model_inputs=extra_model_inputs,
-                )
-                normal_map = None
-                loss = loss.sum()
-                psnr_monitor = psnr_monitor.mean()
-                lpips_monitor = lpips_monitor.mean()
-                # if writer is not None and idx == 0:
-                #     writer.add_scalar('monitor_b0/psnr', psnr_monitor.item(), it)
-                #     writer.add_scalar('monitor_b0/lpips', lpips_monitor.item(), it)
-                #     rot_error = pose_utils.rotation_matrix_distance(
-                #         cam, gt_cam2world_mat).mean().item()
-                #     rot_errors.append(rot_error)
-                #     writer.add_scalar('monitor_b0/rot_error', rot_error, it)
-
-                if args.use_sdf and normal_map is not None:
-                    rgb_predicted = torch.cat(
-                        (rgb_predicted.detach(), normal_map.detach()), dim=-2)
-
-                loss.backward()
-                for i, param in enumerate(param_list):
-                    if param.grad is not None:
-                        grad_norms[i].append(param.grad.norm().item())
-                    else:
-                        grad_norms[i].append(0.)
-                optimizer.step()
-                optimizer.zero_grad()
-                R_.data[:] = F.normalize(R_.data, dim=-1)
-                if z0_ is not None:
-                    z0_.data.clamp_(-4, 4)
-                s_.data.abs_()
-
-                if args.inv_export_demo_sample:
-                    print(it + 1, '/', max(checkpoint_steps))
-                if it + 1 in report:
-                    evaluate_inversion(idx+1, it + 1, out_dir,
-                                       target_img_fid_, target_center_fid, target_bbox_fid,
-                                       (args.inv_export_demo_sample and it + 1 == max(checkpoint_steps)))
-
-            t2 = time.time()
-            print(
-                f'[{idx+1}/{len(nusc_loader)}] Finished batch in {t2 - t1} s ({(t2 - t1)} s/img)'
+            # TODO: seems to support perspective camera K as well
+            loss, psnr_monitor, lpips_monitor, rgb_predicted = model_to_call(
+                cam,
+                focal,
+                target_center,
+                target_bbox,
+                z_ * lr_gain_z,
+                use_ema=True,
+                ray_multiplier=1 if args.fine_sampling else 4,
+                res_multiplier=1,
+                compute_normals=False and args.use_sdf,
+                force_no_cam_grad=no_optimize_pose,
+                closure=optimize_iter,
+                closure_params={
+                    'target_img': target_img,
+                    'cam': cam,
+                    'focal': focal
+                },
+                extra_model_inputs=extra_model_inputs,
             )
+            normal_map = None
+            loss = loss.sum()
+            psnr_monitor = psnr_monitor.mean()
+            lpips_monitor = lpips_monitor.mean()
+            # if writer is not None and idx == 0:
+            #     writer.add_scalar('monitor_b0/psnr', psnr_monitor.item(), it)
+            #     writer.add_scalar('monitor_b0/lpips', lpips_monitor.item(), it)
+            #     rot_error = pose_utils.rotation_matrix_distance(
+            #         cam, gt_cam2world_mat).mean().item()
+            #     rot_errors.append(rot_error)
+            #     writer.add_scalar('monitor_b0/rot_error', rot_error, it)
+
+            if args.use_sdf and normal_map is not None:
+                rgb_predicted = torch.cat(
+                    (rgb_predicted.detach(), normal_map.detach()), dim=-2)
+
+            loss.backward()
+            for i, param in enumerate(param_list):
+                if param.grad is not None:
+                    grad_norms[i].append(param.grad.norm().item())
+                else:
+                    grad_norms[i].append(0.)
+            optimizer.step()
+            optimizer.zero_grad()
+            R_.data[:] = F.normalize(R_.data, dim=-1)
+            if z0_ is not None:
+                z0_.data.clamp_(-4, 4)
+            s_.data.abs_()
 
             # if args.inv_export_demo_sample:
-            #     # Evaluate (and save) only the first batch, then exit
-            #     break
+            #     print(it + 1, '/', max(checkpoint_steps))
+            if it + 1 in report:
+                evaluate_inversion(idx+1, it + 1, out_dir,
+                                   target_img_fid_, target_center_fid, target_bbox_fid,
+                                   (args.inv_export_demo_sample and it + 1 == max(checkpoint_steps)))
 
-            # if idx % 512 == 0:
-            #     # Save report checkpoint
-            #     with utils.open_file(report_checkpoint_path, 'wb') as f:
-            #         torch.save({
-            #             'report': report,
-            #             'idx': idx,
-            #             'test_bs': test_bs,
-            #         }, f)
+        t2 = time.time()
+        print(
+            f'[{idx+1}/{len(nusc_loader)}] Finished batch in {t2 - t1} s ({(t2 - t1)} s/img)'
+        )
+
+        # if args.inv_export_demo_sample:
+        #     # Evaluate (and save) only the first batch, then exit
+        #     break
+
+        # if idx % 512 == 0:
+        #     # Save report checkpoint
+        #     with utils.open_file(report_checkpoint_path, 'wb') as f:
+        #         torch.save({
+        #             'report': report,
+        #             'idx': idx,
+        #             'test_bs': test_bs,
+        #         }, f)
