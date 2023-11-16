@@ -925,8 +925,8 @@ class NuScenesDataset(torch.utils.data.Dataset):
         img = CustomDataset.crop(img, bbox, bgval=1)
         mask = (mask_occ > 0).astype(np.float32)[:, :, None]
         mask = CustomDataset.crop(mask, bbox, bgval=0)
-        K[0, 2] -= bbox[0]
-        K[1, 2] -= bbox[1]
+        K[0, 2] -= (bbox[0] + bbox[2])/2
+        K[1, 2] -= (bbox[1] + bbox[3])/2
 
         # Scale image so largest bbox size is img_size
         bwidth = np.shape(img)[0]
@@ -934,7 +934,9 @@ class NuScenesDataset(torch.utils.data.Dataset):
         scale = self.img_size / float(max(bwidth, bheight))
         img, _ = CustomDataset.resize_img(img, scale)
         mask, _ = CustomDataset.resize_img(mask, scale)
-        K[:2, :] *= scale
+        # K[:2, :] *= scale
+        K[0, :] /= float(max(bwidth, bheight))
+        K[1, :] /= float(max(bwidth, bheight))
 
         # Finally transpose the image to 3xHxW
         img = np.transpose(img, (2, 0, 1))

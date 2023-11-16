@@ -131,6 +131,106 @@ def compute_pose_pnp(coords, masks, focal_proposals, refine=True):
                                        axis=0), np.stack(all_errors, axis=0))
 
 
+def compute_pose_pnp_new(coords, masks, intrinsics, refine=True):
+    """
+        The intrinsics are supposed to adjusted to cropped patch wrt to the original camera center
+    """
+    bs, height, width, _ = coords.shape
+    # prepare ii, jj in the actual coordinates to applied prepared intrinsics directly
+    ii, jj = np.meshgrid(np.arange(width) / width,
+                         np.arange(height) / height,
+                         indexing='xy')
+    grid_xy = np.stack((ii, jj), axis=-1) - 0.5
+    grid_xy = grid_xy.reshape(-1, 2).astype(np.float64)
+    coords = coords.astype(np.float64)
+
+    all_world2cam_mat = []
+    all_errors = []
+    for idx in range(bs):
+        foreground_indices, = np.where(masks[idx].flatten())
+        pts_xyz = coords[idx].reshape(-1, 3)[foreground_indices]
+        pts_screen = grid_xy[foreground_indices]
+        best_error = np.inf
+        best_pose = None
+
+        if len(foreground_indices) < 4:
+            # If less than 4 points, do not attempt to solve
+            break
+
+        main_solver = cv2.SOLVEPNP_SQPNP
+        fallback_solver = cv2.SOLVEPNP_EPNP
+
+        solver = main_solver
+        best_idx = None
+        while True:
+            try:
+                retval, rvec, tvec, err = cv2.solvePnPGeneric(pts_xyz,
+                                                              pts_screen,
+                                                              intrinsics[idx].numpy().astype(np.float64),
+                                                              None,
+                                                              flags=solver)
+                best_idx, err = select_best_valid_pose(tvec, err)
+                if best_idx is not None:
+                    break
+            except:
+                pass
+
+        if solver == main_solver:
+            solver = fallback_solver
+        else:
+            # Unable to solve
+            solver = None
+            break
+
+        if solver is None:
+            # No solutions or negative z -> discard
+            continue
+
+        if refine:
+            # Sometimes the pose is slightly off from the optimum due to
+            # numerical errors, so we refine it using an iterative solver
+            retval, rvec_, tvec_, err_ = cv2.solvePnPGeneric(
+                pts_xyz,
+                pts_screen,
+                intrinsics[idx].numpy().astype(np.float64),
+                None,
+                flags=cv2.SOLVEPNP_ITERATIVE,
+                useExtrinsicGuess=True,
+                rvec=rvec[best_idx],
+                tvec=tvec[best_idx])
+
+            # If z is negative, the previous (working) solution is ruined
+            if retval == 1 and tvec_[0][2] > 0:
+                tvec = tvec_
+                rvec = rvec_
+                best_idx = 0
+                err = err_[0][0]
+
+        if err < best_error:
+            best_error = err
+            best_pose = (rvec[best_idx], tvec[best_idx])
+
+        if best_pose is not None:
+            rvec, tvec = best_pose
+        else:
+            # Return dummy pose pointing outside the object (empty screen)
+            rvec = np.zeros(3)
+            tvec = np.zeros(3)
+            tvec[2] = -10
+            best_error = 10.
+        world2cam_mat = np.eye(4)
+        rot_mat = cv2.Rodrigues(rvec)[0]
+        flip = np.eye(4)
+        flip[1, 1] = flip[2, 2] = -1
+        world2cam_mat[:3, :3] = rot_mat
+        world2cam_mat[:3, 3] = tvec.flatten()
+        # By default: flipped camera
+        all_world2cam_mat.append(flip @ world2cam_mat)
+        all_errors.append(best_error)
+
+    return (np.stack(all_world2cam_mat, axis=0), np.stack(all_errors, axis=0))
+
+
 def get_focal_guesses(focal_length):
     if focal_length is not None:
         sorted_focals = focal_length.cpu().numpy().copy()

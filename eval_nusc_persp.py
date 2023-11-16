@@ -29,11 +29,12 @@ from models import generator
 from models import discriminator
 from models import encoder
 
-# TODO: manually set as the p3d training distribution
-dataset_config = {'scene_range': 1.4, 'camera_flipped': True, 'white_background': False}
-# TODO: Is it needed to match the trained model? How to use accurate focal length of the test image?
-focal_guesses = np.asarray([0.71839845,  1.07731938,  1.32769489,  1.59814608,  1.88348041,  2.27928376,
+# manually record p3d training distribution
+p3d_scene_range = 1.4  # pretrained model is based on this scale
+p3d_focal_guesses = np.asarray([0.71839845,  1.07731938,  1.32769489,  1.59814608,  1.88348041,  2.27928376,
                             2.82873106,  3.73867059,  5.14416647,  9.12456608, 27.79907417])
+# scene_range should match the target testing dataset. NeRF model will scale based on it
+dataset_config = {'scene_range': 3, 'camera_flipped': True, 'white_background': False}
 
 
 def render(target_model,
@@ -53,12 +54,13 @@ def render(target_model,
            extra_model_inputs={},
            force_no_cam_grad=False):
 
-    # TODO: just change this to use normal K? initial tform_cam2world need to be updated too
+    # Attention: the focal_length and center need to be assigned propperly for rendering.
     ray_origins, ray_directions = nerf_utils.get_ray_bundle(
         height, width, focal_length, tform_cam2world, bbox, center)
 
     ray_directions = F.normalize(ray_directions, dim=-1)
     with torch.no_grad():
+        # TODO: scene_range seems a sensitive factor, a target dataset needs a different range. Need to understand more
         near_thresh, far_thresh = nerf_utils.compute_near_far_planes(
             ray_origins.detach(), ray_directions.detach(),
             dataset_config['scene_range'])
@@ -320,6 +322,19 @@ def estimate_poses_batch(target_coords, target_mask, focal_guesses):
     return estimated_cam2world_mat, estimated_focal, errors
 
 
+def estimate_poses_batch_new(target_coords, target_mask, intrinsics):
+    target_mask = target_mask > 0.9
+
+    world2cam_mat, errors = pose_estimation.compute_pose_pnp_new(
+        target_coords.cpu().numpy(),
+        target_mask.cpu().numpy(), intrinsics)
+
+    estimated_cam2world_mat = pose_utils.invert_space(
+        torch.from_numpy(world2cam_mat).float()).to(target_coords.device)
+
+    return estimated_cam2world_mat, errors
+
+
 def augment_impl(img, pose, focal, p, disable_scale=False, cached_tform=None):
     bs = img.shape[0] if img is not None else pose.shape[0]
     device = img.device if img is not None else pose.device
@@ -477,7 +492,7 @@ def optimize_iter(module, rgb_predicted, acc_predicted,
 
 def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid, target_bbox_fid, export_sample=False, inception_net=None):
     item = report[it]
-    # TODO: modify if necessary. Not we assume z_, z0_, R_, s_, t2_ in right number before calling this function
+    # TODO: Now just assume z_, z0_, R_, s_, t2_ in right number before calling this function
     item['ws'].append(z_.detach().cpu() * lr_gain_z)
     if z0_ is not None:
         item['z0'].append(z0_.detach().cpu())
@@ -491,6 +506,7 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
         t2_.detach(),
         s_.detach(),
         F.normalize(R_.detach(), dim=-1),
+        # camera_flipped=False)
         camera_flipped=dataset_config['camera_flipped'])
     rgb_predicted, _, acc_predicted, normals_predicted, semantics_predicted, extra_model_outputs = model_to_call(
         cam,
@@ -583,6 +599,8 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
     #                 0, 3, 1, 2) / 2 + 0.5, it)
     #
     # Modified -- convert back to object pose the change the orientation only, so to keep the object still image center
+
+    # TODO: now these random perm pose can be replaced with another view of the same object
     angle_lim = np.pi * 0.2
     rotvec_rand = [random.uniform(-angle_lim, angle_lim),
                    random.uniform(-angle_lim, angle_lim),
@@ -593,8 +611,10 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
     target_tform_world2cam_perm[0, :3, :3] = target_tform_world2cam_perm[0, :3, :3] @ torch.FloatTensor(R_rand).to(device)
     target_tform_cam2world_perm = pose_utils.invert_space(target_tform_world2cam_perm)
 
-    target_focal_perm = focal * random.uniform(0.7, 2)
-    target_center_perm = None
+    # target_focal_perm = None
+    # target_focal_perm = focal * random.uniform(0.7, 2)
+    target_focal_perm = focal
+    target_center_perm = batch_data['K_batch'][:, :2, 2].to(device) + 0.5
     target_bbox_perm = None
 
     rgb_predicted, _, _, normals_predicted, semantics_predicted, _ = model_to_call(
@@ -841,6 +861,7 @@ if __name__ == '__main__':
     lr_gain_z = args.inv_gain_z
     inv_no_split = args.inv_no_split
     no_optimize_pose = args.inv_no_optimize_pose
+    # no_optimize_pose = True  # for debugging: tmp debug only the nerf given perfect pose
 
     # if args.inv_manual_input_path:
     #     # Demo inference on manually supplied image
@@ -946,10 +967,12 @@ if __name__ == '__main__':
         target_img_fid_ = target_img  # Target for evaluation (front view -- always cropped)
         # target_tform_cam2world = test_split[target_img_idx].tform_cam2world
         # target_focal = test_split[target_img_idx].focal_length
-        target_center = None  # this is for the rendering range in the given image, in pixels. None for full patch
+        # target_focal = None
+        target_focal = batch_data['K_batch'][0, 0, 0].to(device)
+        target_center = batch_data['K_batch'][:, :2, 2].to(device) + 0.5 # this is for the rendering range in the given image, None for full patch
         target_bbox = None  # this is for the rendering range in the given image, in pixels. None for full patch
 
-        target_center_fid = None
+        target_center_fid = batch_data['K_batch'][:, :2, 2].to(device) + 0.5
         target_bbox_fid = None
 
         # if use_pose_regressor and 'p3d' in args.dataset:
@@ -973,28 +996,46 @@ if __name__ == '__main__':
                                            [0, 0, 1, 0],
                                            [0, 0, 0, 1]])
         gt_cam2world_mat[0] = nusc2shapenet @ gt_cam2world_mat[0]
-        if dataset_config['camera_flipped']:
-            gt_cam2world_mat[:, :3, 1:] *= -1
-
         gt_cam2world_mat = gt_cam2world_mat.to(device)
         z_ = z_avg.clone().expand(1, -1, -1).contiguous()
 
-        # TODO: estimated cam2world pose: the object pose in a virtual camera centered at the patch center
+        # Modified: to use the actual known intrinsics
         with torch.no_grad():
             coord_regressor_img = target_img[..., :3].permute(0, 3, 1, 2)
 
             target_coords, target_mask, target_w = coord_regressor.module(
                 coord_regressor_img)
+            # modified: adjust the scale to target dataset
+            target_coords *= (dataset_config['scene_range'] / p3d_scene_range)
 
             if use_pose_regressor:
                 assert target_coords is not None
-                estimated_cam2world_mat, estimated_focal, _ = estimate_poses_batch(
-                    target_coords, target_mask, focal_guesses)
+                estimated_cam2world_mat, _ = estimate_poses_batch_new(
+                    target_coords, target_mask, batch_data['K_batch'])
                 target_tform_cam2world = estimated_cam2world_mat
-                target_focal = estimated_focal
             if use_latent_regressor:
                 assert target_w is not None
                 z_.data[:] = target_w
+
+        if dataset_config['camera_flipped']:
+            # gt_cam2world_mat[:, :3, 1:] *= -1
+            gt_cam2world_mat[:, :3, 1:3] *= -1
+            # target_tform_cam2world[:, :3, 1:] *= -1
+        # # For Debugging: manual fix of scale
+        # target_tform_cam2world[:, :3, 3] *= 2
+
+        # # For Debugging: tmp debug only the nerf given perfect pose
+        # target_tform_cam2world = gt_cam2world_mat
+
+        # # For Debugging: printing the estimated pose and
+        # print('estimated cam pose')
+        # print(target_tform_cam2world[0].cpu().numpy())
+        # print('gt cam pose converted')
+        # print(gt_cam2world_mat[0].cpu().numpy())
+        # print('estimated object pose')
+        # print(pose_utils.invert_space(target_tform_cam2world)[0].cpu().numpy())
+        # print('gt object pose origin')
+        # print(pose_utils.invert_space(gt_cam2world_mat)[0].cpu().numpy())
 
         if inv_no_split:
             z_ = z_.mean(dim=1, keepdim=True)
@@ -1002,24 +1043,26 @@ if __name__ == '__main__':
         z_ /= lr_gain_z
         z_ = z_.requires_grad_()
 
-        # TODO: this pose representation is for optimization, will it work for actual camera?
+        # might be working, passing target_focal as None, so not to optimize
         z0_, t2_, s_, R_ = pose_utils.matrix_to_pose(
             target_tform_cam2world,
             target_focal,
+            # camera_flipped=False)
             camera_flipped=dataset_config['camera_flipped'])
 
         if not no_optimize_pose:
             t2_.requires_grad_()
             s_.requires_grad_()
             R_.requires_grad_()
-        if z0_ is not None:
-            if not no_optimize_pose:
-                z0_.requires_grad_()
-            param_list = [z_, z0_, R_, s_, t2_]
-            param_names = ['z', 'f', 'R', 's', 't']
-        else:
-            param_list = [z_, R_, s_, t2_]
-            param_names = ['z', 'R', 's', 't']
+        # if z0_ is not None:
+        #     if not no_optimize_pose:
+        #         z0_.requires_grad_()
+        #     param_list = [z_, z0_, R_, s_, t2_]
+        #     param_names = ['z', 'f', 'R', 's', 't']
+        # else:
+        # modified: never optimize focal length, since given the true
+        param_list = [z_, R_, s_, t2_]
+        param_names = ['z', 'R', 's', 't']
         if no_optimize_pose:
             param_list = param_list[:1]
             param_names = param_names[:1]
@@ -1049,9 +1092,10 @@ if __name__ == '__main__':
                 t2_,
                 s_,
                 F.normalize(R_, dim=-1),
+                # camera_flipped=False)
                 camera_flipped=dataset_config['camera_flipped'])
 
-            # TODO: seems to support perspective camera K as well
+            # Attention: need to assign focal and target_center properly for given camera K
             loss, psnr_monitor, lpips_monitor, rgb_predicted = model_to_call(
                 cam,
                 focal,

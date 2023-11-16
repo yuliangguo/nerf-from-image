@@ -40,6 +40,7 @@ def get_ray_bundle(height: int,
     if focal_length is not None:
         # Perspective camera projection model
         if center is not None:
+            # TODO: strange definition of center. It only works by feeding strange center following such def
             ii = ii.unsqueeze(0) - 0.5 * (2 * center[:, 0, None, None] -
                                           1) - 0.5
             jj = jj.unsqueeze(0) - 0.5 * (2 * center[:, 1, None, None] -
@@ -57,6 +58,7 @@ def get_ray_bundle(height: int,
         ii = ii / focal_length.unsqueeze(-1).unsqueeze(-1)
         jj = jj / focal_length.unsqueeze(-1).unsqueeze(-1)
 
+        # By default: flipped camera
         directions = torch.stack((ii, -jj, -torch.ones_like(ii)), dim=-1)
         ray_directions = torch.sum(directions[..., None, :] *
                                    tform_cam2world[:, None, None, :3, :3],

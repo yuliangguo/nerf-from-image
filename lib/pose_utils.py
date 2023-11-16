@@ -58,16 +58,21 @@ def pose_to_matrix(z0, t2, s, q, camera_flipped: bool):
         mat[:, :3, 3] = (t3[:, None, :] * R).sum(dim=-1)
         if camera_flipped:
             mat[:, :3, 1:] *= -1
+            # mat[:, :3, 1:3] *= -1
         return mat, f / 2
     else:
         mat = torch.zeros((q.shape[0], 4, 4), device=R.device)
         mat[:, 3, 3] = 1
         mat[:, :3, :3] = R
-        t3 = torch.cat((t2, torch.ones_like(t2[:, :1]) * 10), dim=-1)
+        # Origin bug here: the non-invertable pose_to_matrix and matrix_to_pose given None focal length
+        # t3 = torch.cat((t2, torch.ones_like(t2[:, :1]) * 10), dim=-1)
+        t3 = torch.cat((t2, torch.ones_like(t2[:, :1])), dim=-1) / s
         mat[:, :3, 3] = (t3[:, None, :] * R).sum(dim=-1)
         if camera_flipped:
             mat[:, :3, 1:] *= -1
-        return mat / s[:, None, None], None
+            # mat[:, :3, 1:3] *= -1
+        # return mat / s[:, None, None], None
+        return mat, None
 
 
 def matrix_to_quaternion(matrix):
@@ -101,7 +106,9 @@ def matrix_to_pose(tform_cam2world, focal_length, camera_flipped: bool):
 
     tform_cam2world = tform_cam2world.clone()
     if camera_flipped:
+        # TODO: bug? This conversion is only between the optimizing space and actual cam. But why the right convertion ruie the optimization?
         tform_cam2world[:, :3, 1:] *= -1
+        # tform_cam2world[:, :3, 1:3] *= -1
     M_inv = invert_space(tform_cam2world)
     t3 = -M_inv[:, :3, 3]
 
@@ -110,7 +117,9 @@ def matrix_to_pose(tform_cam2world, focal_length, camera_flipped: bool):
         s = 2 * focal_length / t3[:, 2]
     else:
         z0 = None
-        s = 1 / tform_cam2world[:, 3, 3]
+        # Origin bug here: the non-invertable pose_to_matrix and matrix_to_pose given None focal length
+        # s = 1 / tform_cam2world[:, 3, 3]
+        s = 1 / t3[:, 2]
 
     t2 = t3[:, :2] * s.unsqueeze(-1)
     R = []
@@ -128,6 +137,7 @@ def matrix_to_conditioning_vector(tform_cam2world, focal_length,
     tform_cam2world = tform_cam2world.clone()
     if camera_flipped:
         tform_cam2world[:, :3, 1:] *= -1
+        # tform_cam2world[:, :3, 1:3] *= -1
     M_inv = invert_space(tform_cam2world)
     R = M_inv[:, :3, :3].flatten(1, 2)
     t3 = -M_inv[:, :3, 3]
@@ -137,7 +147,9 @@ def matrix_to_conditioning_vector(tform_cam2world, focal_length,
         s = 2 * focal_length / t3[:, 2]
     else:
         z0 = None
-        s = 1 / tform_cam2world[:, 3, 3]
+        # Origin bug here: the non-invertable pose_to_matrix and matrix_to_pose given None focal length
+        # s = 1 / tform_cam2world[:, 3, 3]
+        s = 1 / t3[:, 2]
         z0 = torch.zeros_like(s)
 
     t2 = t3[:, :2] * s.unsqueeze(-1)
