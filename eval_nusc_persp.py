@@ -34,7 +34,7 @@ p3d_scene_range = 1.4  # pretrained model is based on this scale
 p3d_focal_guesses = np.asarray([0.71839845,  1.07731938,  1.32769489,  1.59814608,  1.88348041,  2.27928376,
                             2.82873106,  3.73867059,  5.14416647,  9.12456608, 27.79907417])
 # scene_range should match the target testing dataset. NeRF model will scale based on it
-dataset_config = {'scene_range': 3, 'camera_flipped': True, 'white_background': False}
+dataset_config = {'scene_range': 3.0, 'camera_flipped': True, 'white_background': False}
 
 
 def render(target_model,
@@ -508,7 +508,7 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
         F.normalize(R_.detach(), dim=-1),
         # camera_flipped=False)
         camera_flipped=dataset_config['camera_flipped'])
-    rgb_predicted, _, acc_predicted, normals_predicted, semantics_predicted, extra_model_outputs = model_to_call(
+    rgb_predicted, depth_predicted, acc_predicted, normals_predicted, semantics_predicted, extra_model_outputs = model_to_call(
         cam,
         focal,
         target_center_fid,
@@ -549,10 +549,10 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
                     (demo_img, normals_predicted.permute(0, 3, 1, 2)),
                     dim=3)
 
-    item['psnr'].append(
-        metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
-                     target_perm[:, :3] / 2 + 0.5,
-                     reduction='none').cpu())
+    psnr = metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
+                        target_perm[:, :3] / 2 + 0.5,
+                        reduction='none').cpu()
+    item['psnr'].append(psnr)
     item['ssim'].append(
         metrics.ssim(rgb_predicted_perm[:, :3] / 2 + 0.5,
                      target_perm[:, :3] / 2 + 0.5,
@@ -573,10 +573,19 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
     #                 inception_net,
     #                 rgb_predicted_perm[:, :3] / 2 + 0.5)))
     # if not (args.dataset == 'p3d_car' and use_testset):
-        # Ground-truth poses are not available on P3D Car (test set)
-    item['rot_error'].append(
-        pose_utils.rotation_matrix_distance(cam, gt_cam2world_mat))
-    print(f'rot error {it}it: {pose_utils.rotation_matrix_distance(cam, gt_cam2world_mat).item()}')
+    # Ground-truth poses are not available on P3D Car (test set)
+    depth_error = torch.mean(torch.abs(gt_depth - depth_predicted)[gt_depth_mask])
+    item['depth_error'].append(depth_error)
+
+    rot_error = pose_utils.rotation_matrix_distance(cam, gt_cam2world_mat)
+    item['rot_error'].append(rot_error)
+
+    trans_error = torch.sqrt(torch.sum((cam[:, :3, 3] - gt_cam2world_mat[:, :3, 3])**2))
+    item['trans_error'].append(trans_error)
+
+    print(f'it{it}: psnr: {psnr.item()}, depth error: {depth_error.item()}, '
+          f'rot error: {rot_error.item()}, trans error: {trans_error.item()}')
+
     #
     # if writer is not None and idx == 0:
     #     if it == checkpoint_steps[0]:
@@ -617,7 +626,7 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
     target_center_perm = batch_data['K_batch'][:, :2, 2].to(device) + 0.5
     target_bbox_perm = None
 
-    rgb_predicted, _, _, normals_predicted, semantics_predicted, _ = model_to_call(
+    rgb_predicted, depth_predicted, _, normals_predicted, semantics_predicted, _ = model_to_call(
         target_tform_cam2world_perm,
         target_focal_perm,
         target_center_perm,
@@ -946,7 +955,9 @@ if __name__ == '__main__':
             'ssim': [],
             'ssim_random': [],
             'iou': [],
+            'depth_error': [],
             'rot_error': [],
+            'trans_error': [],
             'inception_activations_front': [],  # Front view
             'inception_activations_random': [],  # Random view
         } for step in checkpoint_steps
@@ -997,6 +1008,9 @@ if __name__ == '__main__':
                                            [0, 0, 0, 1]])
         gt_cam2world_mat[0] = nusc2shapenet @ gt_cam2world_mat[0]
         gt_cam2world_mat = gt_cam2world_mat.to(device)
+        gt_depth = batch_data['depth_batch'].to(device)
+        gt_depth_mask = gt_depth > 0
+
         z_ = z_avg.clone().expand(1, -1, -1).contiguous()
 
         # Modified: to use the actual known intrinsics

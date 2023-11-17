@@ -925,6 +925,8 @@ class NuScenesDataset(torch.utils.data.Dataset):
         img = CustomDataset.crop(img, bbox, bgval=1)
         mask = (mask_occ > 0).astype(np.float32)[:, :, None]
         mask = CustomDataset.crop(mask, bbox, bgval=0)
+        depth_map = depth_map.copy()[:, :, None]
+        depth_map = CustomDataset.crop(depth_map, bbox, bgval=-1)
         K[0, 2] -= (bbox[0] + bbox[2])/2
         K[1, 2] -= (bbox[1] + bbox[3])/2
 
@@ -934,6 +936,8 @@ class NuScenesDataset(torch.utils.data.Dataset):
         scale = self.img_size / float(max(bwidth, bheight))
         img, _ = CustomDataset.resize_img(img, scale)
         mask, _ = CustomDataset.resize_img(mask, scale)
+        # resize sparse depth using nearest rather than interpolation
+        depth_map = cv2.resize(depth_map, (self.img_size, self.img_size), interpolation=cv2.INTER_NEAREST)
         # K[:2, :] *= scale
         K[0, :] /= float(max(bwidth, bheight))
         K[1, :] /= float(max(bwidth, bheight))
@@ -947,7 +951,8 @@ class NuScenesDataset(torch.utils.data.Dataset):
         img = torch.FloatTensor(img).permute(1, 2, 0)
 
         sample_data['img_batch'] = img
-        sample_data['mask_batch'] = torch.FloatTensor(mask)
+        sample_data['mask_batch'] = torch.FloatTensor(mask.squeeze())
+        sample_data['depth_batch'] = torch.FloatTensor(depth_map)
         sample_data['bbox_batch'] = torch.FloatTensor(bbox)
         sample_data['K_batch'] = torch.FloatTensor(K)
 
@@ -1103,6 +1108,7 @@ class NuScenesDataset(torch.utils.data.Dataset):
             bboxes.append(torch.FloatTensor(bbox).unsqueeze(0))
             Ks.append(torch.FloatTensor(K).unsqueeze(0))
 
+        # TODO: need to sync with the right setup updated in __getitem__
         sample_data['images'] = torch.cat(images, dim=0)
         sample_data['masks'] = torch.cat(masks, dim=0)
         sample_data['bboxes'] = torch.cat(bboxes, dim=0)
