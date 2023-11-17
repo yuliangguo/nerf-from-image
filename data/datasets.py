@@ -772,7 +772,8 @@ class NuScenesDataset(torch.utils.data.Dataset):
                  nusc_version,
                  split='val',
                  img_size=128,
-                 debug=False
+                 debug=False,
+                 external_pose_file=None,
                  ):
         self.nusc_cat = 'vehicle.car'
         self.seg_cat = 'car'
@@ -800,6 +801,10 @@ class NuScenesDataset(torch.utils.data.Dataset):
         self.out_gt_depth = True
         self.pred_box2d = False
         self.debug = debug
+
+        if external_pose_file is not None:
+            saved_results = torch.load(external_pose_file, map_location=torch.device('cpu'))
+            self.optimized_poses = saved_results['optimized_poses']
 
     def get_mask_occ_from_ins(self, masks, tgt_ins_id):
         """
@@ -899,6 +904,7 @@ class NuScenesDataset(torch.utils.data.Dataset):
             lidar_pts_im_ann[1, :].astype(np.int32), lidar_pts_im_ann[0, :].astype(np.int32)] = lider_pts_depth_ann
         sample_data['depth_maps'] = torch.from_numpy(depth_map.astype(np.float32))
 
+        obj_pose_ext = self.optimized_poses[anntoken][cam]
         # ATTENTION: prepare batch data including ray based samples can further improve efficiency,
         # but lower flexible for training considering different crop sizes
 
@@ -908,6 +914,7 @@ class NuScenesDataset(torch.utils.data.Dataset):
         sample_data['cam_intrinsics'] = torch.from_numpy(camera_intrinsic.astype(np.float32))
         sample_data['cam_poses'] = torch.from_numpy(np.asarray(cam_pose).astype(np.float32))
         sample_data['obj_poses'] = torch.from_numpy(np.asarray(obj_pose).astype(np.float32))
+        sample_data['obj_poses_ext'] = obj_pose_ext
         sample_data['instoken'] = self.instoken_per_ann[anntoken]
         sample_data['anntoken'] = anntoken
         sample_data['cam_ids'] = cam

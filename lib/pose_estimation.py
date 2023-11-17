@@ -170,7 +170,7 @@ def compute_pose_pnp_new(coords, masks, intrinsics, refine=True):
                                                               None,
                                                               flags=solver)
                 best_idx, err = select_best_valid_pose(tvec, err)
-                if best_idx is not None and tvec[0][2] > 0:  # modified to make sure the observed object in front cam
+                if best_idx is not None:
                     break
             except:
                 pass

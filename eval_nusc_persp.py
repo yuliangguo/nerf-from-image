@@ -583,9 +583,6 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
     trans_error = torch.sqrt(torch.sum((cam[:, :3, 3] - gt_cam2world_mat[:, :3, 3])**2))
     item['trans_error'].append(trans_error)
 
-    print(f'it{it}: psnr: {psnr.item()}, depth error: {depth_error.item()}, '
-          f'rot error: {rot_error.item()}, trans error: {trans_error.item()}')
-
     #
     # if writer is not None and idx == 0:
     #     if it == checkpoint_steps[0]:
@@ -609,21 +606,55 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
     #
     # Modified -- convert back to object pose the change the orientation only, so to keep the object still image center
 
-    # TODO: now these random perm pose can be replaced with another view of the same object
-    angle_lim = np.pi * 0.2
-    rotvec_rand = [random.uniform(-angle_lim, angle_lim),
-                   random.uniform(-angle_lim, angle_lim),
-                   random.uniform(-angle_lim, angle_lim)]
-    R_rand = R.from_rotvec(rotvec_rand).as_matrix()
-    target_tform_cam2world = cam.clone()
-    target_tform_world2cam_perm = pose_utils.invert_space(target_tform_cam2world)
-    target_tform_world2cam_perm[0, :3, :3] = target_tform_world2cam_perm[0, :3, :3] @ torch.FloatTensor(R_rand).to(device)
-    target_tform_cam2world_perm = pose_utils.invert_space(target_tform_world2cam_perm)
+    instoken = batch_data['instoken'][0]
+    anntoken = batch_data['anntoken'][0]
+    cam_id = batch_data['cam_ids'][0]
 
-    # target_focal_perm = None
-    # target_focal_perm = focal * random.uniform(0.7, 2)
-    target_focal_perm = focal
-    target_center_perm = batch_data['K_batch'][:, :2, 2].to(device) + 0.5
+    samples_of_ins = nusc_dataset.anntokens_per_ins[instoken]
+    views_per_object = len(samples_of_ins)
+    if views_per_object > 1:
+        # find another random view of the same object
+        indices_perm = list(range(views_per_object))
+        random.shuffle(indices_perm)
+        for ind in indices_perm:
+            anntoken_perm, cam_id_perm = samples_of_ins[ind]
+            if anntoken_perm != anntoken or cam_id_perm != cam_id:
+                break
+        sample_idx_perm = nusc_dataset.all_valid_samples.index([anntoken_perm, cam_id_perm])
+        batch_data_perm = nusc_dataset.__getitem__(sample_idx_perm)
+
+        target_tform_cam2world_perm = torch.eye(4).unsqueeze(0)
+        target_tform_cam2world_perm[0, :3, :] = batch_data_perm['cam_poses']
+        nusc2shapenet = torch.FloatTensor([[0, 1, 0, 0],
+                                           [-1, 0, 0, 0],
+                                           [0, 0, 1, 0],
+                                           [0, 0, 0, 1]])
+        target_tform_cam2world_perm[0] = nusc2shapenet @ target_tform_cam2world_perm[0]
+        target_tform_cam2world_perm = target_tform_cam2world_perm.to(device)
+        if dataset_config['camera_flipped']:
+            # gt_cam2world_mat[:, :3, 1:] *= -1
+            target_tform_cam2world_perm[:, :3, 1:3] *= -1
+        gt_depth_perm = batch_data_perm['depth_batch'].to(device).unsqueeze(0)
+        gt_depth_mask_perm = gt_depth_perm > 0
+        target_focal_perm = batch_data_perm['K_batch'][0, 0].to(device).unsqueeze(0)
+        target_center_perm = batch_data_perm['K_batch'][:2, 2].to(device).unsqueeze(0) + 0.5
+        target_img_perm_ = batch_data_perm['img_batch'].to(device).unsqueeze(0)
+        target_img_perm_ = target_img_perm_.permute(0, 3, 1, 2)
+    else:
+        # just perturb the original view
+        angle_lim = np.pi * 0.2
+        rotvec_rand = [random.uniform(-angle_lim, angle_lim),
+                       random.uniform(-angle_lim, angle_lim),
+                       random.uniform(-angle_lim, angle_lim)]
+        R_rand = R.from_rotvec(rotvec_rand).as_matrix()
+        target_tform_cam2world = cam.clone()
+        target_tform_world2cam_perm = pose_utils.invert_space(target_tform_cam2world)
+        target_tform_world2cam_perm[0, :3, :3] = target_tform_world2cam_perm[0, :3, :3] @ torch.FloatTensor(R_rand).to(device)
+        target_tform_cam2world_perm = pose_utils.invert_space(target_tform_world2cam_perm)
+        # target_focal_perm = None
+        # target_focal_perm = focal * random.uniform(0.7, 2)
+        target_focal_perm = focal
+        target_center_perm = target_center
     target_bbox_perm = None
 
     rgb_predicted, depth_predicted, _, normals_predicted, semantics_predicted, _ = model_to_call(
@@ -642,6 +673,32 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
     )
     rgb_predicted_perm = rgb_predicted.detach().permute(0, 3, 1,
                                                         2).clamp(-1, 1)
+
+    if views_per_object > 1:
+        psnr_random = metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
+                                   target_img_perm_[:, :3] / 2 + 0.5,
+                                   reduction='none').cpu()
+        item['psnr_random'].append(psnr_random)
+
+        depth_error_random = torch.mean(torch.abs(gt_depth_perm - depth_predicted)[gt_depth_mask_perm])
+        item['depth_error_random'].append(depth_error_random)
+
+        item['ssim_random'].append(
+            metrics.ssim(rgb_predicted_perm[:, :3] / 2 + 0.5,
+                         target_img_perm_[:, :3] / 2 + 0.5,
+                         reduction='none').cpu())
+        item['lpips_random'].append(
+            loss_fn_lpips(rgb_predicted_perm[:, :3],
+                          target_img_perm_[:, :3],
+                          normalize=False).flatten().cpu())
+
+        print(f'it{it}: psnr: {psnr.item()}, depth error: {depth_error.item()}, '
+              f'rot error: {rot_error.item()}, trans error: {trans_error.item()}, '
+              f'psnr cross: {psnr_random.item()}, depth error cross: {depth_error_random.item()}')
+    else:
+        print(f'it{it}: psnr: {psnr.item()}, depth error: {depth_error.item()}, '
+              f'rot error: {rot_error.item()}, trans error: {trans_error.item()}')
+
     if export_sample:
         with torch.no_grad():
             demo_img = torch.cat((demo_img, rgb_predicted_perm), dim=3)
@@ -649,7 +706,9 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
                 demo_img = torch.cat(
                     (demo_img, normals_predicted.permute(0, 3, 1, 2)),
                     dim=3)
-
+            # is the novel is from real data, extend with the real image
+            if views_per_object > 1:
+                demo_img = torch.cat((demo_img, target_img_perm_), dim=3)
             # Move the saving code before
             utils.mkdir(out_dir)
             out_fname = f'demo_obj{obj_idx}_{it}it.png'
@@ -659,20 +718,7 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
                                          out_path,
                                          nrow=1,
                                          padding=0)
-    # if views_per_object > 1:
-    #     target_perm_random = target_img_fid_random_.permute(0, 3, 1, 2)
-    #     item['psnr_random'].append(
-    #         metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
-    #                      target_perm_random[:, :3] / 2 + 0.5,
-    #                      reduction='none').cpu())
-    #     item['ssim_random'].append(
-    #         metrics.ssim(rgb_predicted_perm[:, :3] / 2 + 0.5,
-    #                      target_perm_random[:, :3] / 2 + 0.5,
-    #                      reduction='none').cpu())
-    #     item['lpips_random'].append(
-    #         loss_fn_lpips(rgb_predicted_perm[:, :3],
-    #                       target_perm_random[:, :3],
-    #                       normalize=False).flatten().cpu())
+
     # if not args.inv_export_demo_sample:
     #     item['inception_activations_random'].append(
     #         torch.FloatTensor(
@@ -704,10 +750,12 @@ if __name__ == '__main__':
     if not os.path.exists(out_dir):
         os.mkdir(out_dir)
 
-    # load data
     nusc_data_dir = '/mnt/SSD4TB/Datasets/NuScenes/v1.0-mini-full'
     nusc_seg_dir = os.path.join(nusc_data_dir, 'pred_instance')
     nusc_version = 'v1.0-mini'
+
+    # upnerf result file
+    external_pose_file = '/mnt/LinuxDataFast/Projects/nerf-auto-driving/exps_nuscenes_unipnerf/vehicle.car.v1.0-trainval.use_instance.bsize24.e_rate1.0_2023_03_08/test_nuscenes_opt_pose_1_poss_err_full_reg_iters_3_epoch_39_3/codes+poses.pth'
 
     nusc_dataset = NuScenesDataset(
         nusc_data_dir,
@@ -715,6 +763,7 @@ if __name__ == '__main__':
         nusc_version,
         split='val',
         debug=False,
+        external_pose_file=external_pose_file
     )
 
     nusc_loader = DataLoader(nusc_dataset, batch_size=1, num_workers=4, shuffle=False, pin_memory=True)
@@ -726,6 +775,9 @@ if __name__ == '__main__':
     args = arguments.parse_args()
     args.resume_from = 'g_imagenet_car_pretrained'
     args.inv_loss = 'vgg'  # vgg / l1 / mse
+    # no_optimize_pose = args.inv_no_optimize_pose
+    no_optimize_pose = True  # for debugging: tmp debug only the nerf given perfect pose
+    init_pose_type = 'external'  # pnp / gt / external
 
     args.gpus = 1 if args.gpus >= 1 else 0
     args.inv_export_demo_sample = True
@@ -869,8 +921,7 @@ if __name__ == '__main__':
     loss_to_use = args.inv_loss
     lr_gain_z = args.inv_gain_z
     inv_no_split = args.inv_no_split
-    no_optimize_pose = args.inv_no_optimize_pose
-    # no_optimize_pose = True  # for debugging: tmp debug only the nerf given perfect pose
+
 
     # if args.inv_manual_input_path:
     #     # Demo inference on manually supplied image
@@ -935,10 +986,6 @@ if __name__ == '__main__':
         other initial parameters
     """
 
-    # if use_pose_regressor:
-    #     focal_guesses = pose_estimation.get_focal_guesses(
-    #         train_split.focal_length)
-
     checkpoint_steps = [0, 20, 50]
 
     report = {
@@ -956,6 +1003,7 @@ if __name__ == '__main__':
             'ssim_random': [],
             'iou': [],
             'depth_error': [],
+            'depth_error_random': [],
             'rot_error': [],
             'trans_error': [],
             'inception_activations_front': [],  # Front view
@@ -986,19 +1034,6 @@ if __name__ == '__main__':
         target_center_fid = batch_data['K_batch'][:, :2, 2].to(device) + 0.5
         target_bbox_fid = None
 
-        # if use_pose_regressor and 'p3d' in args.dataset:
-        #     # Use views from training set (as test pose distribution is not available)
-        #     target_center_fid = None
-        #     target_bbox_fid = None
-        #
-        #     target_tform_cam2world_perm = train_eval_split[
-        #         target_img_idx_perm].tform_cam2world
-        #     target_focal_perm = train_eval_split[
-        #         target_img_idx_perm].focal_length
-        #     target_center_perm = train_eval_split[
-        #         target_img_idx_perm].center
-        #     target_bbox_perm = train_eval_split[target_img_idx_perm].bbox
-        #
         # gt_cam2world_mat = target_tform_cam2world.clone()
         gt_cam2world_mat = torch.eye(4).unsqueeze(0)
         gt_cam2world_mat[0, :3, :] = batch_data['cam_poses']
@@ -1008,6 +1043,9 @@ if __name__ == '__main__':
                                            [0, 0, 0, 1]])
         gt_cam2world_mat[0] = nusc2shapenet @ gt_cam2world_mat[0]
         gt_cam2world_mat = gt_cam2world_mat.to(device)
+        if dataset_config['camera_flipped']:
+            # gt_cam2world_mat[:, :3, 1:] *= -1
+            gt_cam2world_mat[:, :3, 1:3] *= -1
         gt_depth = batch_data['depth_batch'].to(device)
         gt_depth_mask = gt_depth > 0
 
@@ -1022,26 +1060,33 @@ if __name__ == '__main__':
             # modified: adjust the scale to target dataset
             target_coords *= (dataset_config['scene_range'] / p3d_scene_range)
 
-            if use_pose_regressor:
-                assert target_coords is not None
-                estimated_cam2world_mat, _ = estimate_poses_batch_new(
-                    target_coords, target_mask, batch_data['K_batch'])
-                target_tform_cam2world = estimated_cam2world_mat
+            # if use_pose_regressor:
+            assert target_coords is not None
+            estimated_cam2world_mat, _ = estimate_poses_batch_new(
+                target_coords, target_mask, batch_data['K_batch'])
             if use_latent_regressor:
                 assert target_w is not None
                 z_.data[:] = target_w
 
-        if dataset_config['camera_flipped']:
-            # gt_cam2world_mat[:, :3, 1:] *= -1
-            gt_cam2world_mat[:, :3, 1:3] *= -1
-            # target_tform_cam2world[:, :3, 1:] *= -1
-        # # For Debugging: manual fix of scale
-        # target_tform_cam2world[:, :3, 3] *= 2
+        # For Debugging: tmp debug only the nerf given perfect pose
+        if init_pose_type == 'gt':
+            target_tform_cam2world = gt_cam2world_mat
+        elif init_pose_type == 'external':
+            ext_world2cam_mat = torch.eye(4).unsqueeze(0)
+            ext_world2cam_mat[0, :3, :] = batch_data['obj_poses_ext'][0, 1]
+            ext_cam2world_mat = pose_utils.invert_space(ext_world2cam_mat)
+            nusc2shapenet = torch.FloatTensor([[0, 1, 0, 0],
+                                               [-1, 0, 0, 0],
+                                               [0, 0, 1, 0],
+                                               [0, 0, 0, 1]])
+            ext_cam2world_mat[0] = nusc2shapenet @ ext_cam2world_mat[0]
+            if dataset_config['camera_flipped']:
+                ext_cam2world_mat[:, :3, 1:3] *= -1
+            target_tform_cam2world = ext_cam2world_mat.to(device)
+        else:
+            target_tform_cam2world = estimated_cam2world_mat
 
-        # # For Debugging: tmp debug only the nerf given perfect pose
-        # target_tform_cam2world = gt_cam2world_mat
-
-        # # For Debugging: printing the estimated pose and
+        # For Debugging: printing the estimated pose and
         # print('estimated cam pose')
         # print(target_tform_cam2world[0].cpu().numpy())
         # print('gt cam pose converted')
@@ -1179,14 +1224,27 @@ if __name__ == '__main__':
                 }, f)
             print('====================================================')
             for it in checkpoint_steps:
-                avg_R_err = torch.mean(torch.stack(report[it]['rot_error']))
-                print(f'Average Rotation Error at {it}it: {avg_R_err}')
                 avg_psnr = torch.mean(torch.stack(report[it]['psnr']))
-                print(f'Average psnr at {it}it: {avg_psnr}')
-                avg_ssim = torch.mean(torch.stack(report[it]['ssim']))
-                print(f'Average ssim at {it}it: {avg_ssim}')
-                avg_lpips = torch.mean(torch.stack(report[it]['lpips']))
-                print(f'Average lpips at {it}it: {avg_lpips}')
+                depth_errors = torch.stack(report[it]['depth_error'])
+                avg_depth_error = torch.mean(depth_errors[~torch.isnan(depth_errors)])
+                avg_R_err = torch.mean(torch.stack(report[it]['rot_error']))
+                avg_T_err = torch.mean(torch.stack(report[it]['trans_error']))
+                avg_psnr_cross = torch.mean(torch.stack(report[it]['psnr_random']))
+                depth_errors_cross = torch.stack(report[it]['depth_error_random'])
+                avg_depth_error_cross = torch.mean(depth_errors_cross[~torch.isnan(depth_errors_cross)])
+                # avg_ssim = torch.mean(torch.stack(report[it]['ssim']))
+                # avg_lpips = torch.mean(torch.stack(report[it]['lpips']))
+
+                # print(f'Average psnr at {it}it: {avg_psnr}')
+                # print(f'Average depth error at {it}it: {avg_depth_error}')
+                # print(f'Average Rotation Error at {it}it: {avg_R_err}')
+                # print(f'Average Rotation Error at {it}it: {avg_T_err}')
+                # print(f'Average ssim at {it}it: {avg_ssim}')
+                # print(f'Average lpips at {it}it: {avg_lpips}')
+
+                print(f'it{it}: psnr avg: {avg_psnr.item()}, depth error avg: {avg_depth_error.item()}, '
+                      f'rot error avg: {avg_R_err.item()}, trans error avg: {avg_T_err.item()}, '
+                      f'it{it}: psnr avg: {avg_psnr_cross.item()}, depth error avg: {avg_depth_error_cross.item()}')
                 print('====================================================')
 
     # final save report
@@ -1197,12 +1255,25 @@ if __name__ == '__main__':
         }, f)
     print('====================================================')
     for it in checkpoint_steps:
-        avg_R_err = torch.mean(torch.stack(report[it]['rot_error']))
-        print(f'Average Rotation Error at {it}it: {avg_R_err}')
         avg_psnr = torch.mean(torch.stack(report[it]['psnr']))
-        print(f'Average psnr at {it}it: {avg_psnr}')
-        avg_ssim = torch.mean(torch.stack(report[it]['ssim']))
-        print(f'Average ssim at {it}it: {avg_ssim}')
-        avg_lpips = torch.mean(torch.stack(report[it]['lpips']))
-        print(f'Average lpips at {it}it: {avg_lpips}')
+        depth_errors = torch.stack(report[it]['depth_error'])
+        avg_depth_error = torch.mean(depth_errors[~torch.isnan(depth_errors)])
+        avg_R_err = torch.mean(torch.stack(report[it]['rot_error']))
+        avg_T_err = torch.mean(torch.stack(report[it]['trans_error']))
+        avg_psnr_cross = torch.mean(torch.stack(report[it]['psnr_random']))
+        depth_errors_cross = torch.stack(report[it]['depth_error_random'])
+        avg_depth_error_cross = torch.mean(depth_errors_cross[~torch.isnan(depth_errors_cross)])
+        # avg_ssim = torch.mean(torch.stack(report[it]['ssim']))
+        # avg_lpips = torch.mean(torch.stack(report[it]['lpips']))
+
+        # print(f'Average psnr at {it}it: {avg_psnr}')
+        # print(f'Average depth error at {it}it: {avg_depth_error}')
+        # print(f'Average Rotation Error at {it}it: {avg_R_err}')
+        # print(f'Average Rotation Error at {it}it: {avg_T_err}')
+        # print(f'Average ssim at {it}it: {avg_ssim}')
+        # print(f'Average lpips at {it}it: {avg_lpips}')
+
+        print(f'it{it}: psnr avg: {avg_psnr.item()}, depth error avg: {avg_depth_error.item()}, '
+              f'rot error avg: {avg_R_err.item()}, trans error avg: {avg_T_err.item()}, '
+              f'it{it}: psnr avg: {avg_psnr_cross.item()}, depth error avg: {avg_depth_error_cross.item()}')
         print('====================================================')
