@@ -774,6 +774,7 @@ class NuScenesDataset(torch.utils.data.Dataset):
                  img_size=128,
                  debug=False,
                  external_pose_file=None,
+                 white_bkgd=False,
                  ):
         self.nusc_cat = 'vehicle.car'
         self.seg_cat = 'car'
@@ -801,6 +802,7 @@ class NuScenesDataset(torch.utils.data.Dataset):
         self.out_gt_depth = True
         self.pred_box2d = False
         self.debug = debug
+        self.white_bkgd = white_bkgd
 
         if external_pose_file is not None:
             saved_results = torch.load(external_pose_file, map_location=torch.device('cpu'))
@@ -942,7 +944,8 @@ class NuScenesDataset(torch.utils.data.Dataset):
         bheight = np.shape(img)[1]
         scale = self.img_size / float(max(bwidth, bheight))
         img, _ = CustomDataset.resize_img(img, scale)
-        mask, _ = CustomDataset.resize_img(mask, scale)
+        # mask, _ = CustomDataset.resize_img(mask, scale)
+        mask = cv2.resize(mask, (self.img_size, self.img_size), interpolation=cv2.INTER_NEAREST)
         # resize sparse depth using nearest rather than interpolation
         depth_map = cv2.resize(depth_map, (self.img_size, self.img_size), interpolation=cv2.INTER_NEAREST)
         # K[:2, :] *= scale
@@ -953,8 +956,13 @@ class NuScenesDataset(torch.utils.data.Dataset):
         img = np.transpose(img, (2, 0, 1))
 
         mask = mask[None, :, :]
-        img = img * 2 - 1
-        img *= mask
+        if self.white_bkgd:
+            img *= mask
+            img -= (mask - 1)
+            img = img * 2 - 1
+        else:  # grey bg
+            img = img * 2 - 1
+            img *= mask
         img = torch.FloatTensor(img).permute(1, 2, 0)
 
         sample_data['img_batch'] = img
@@ -962,62 +970,6 @@ class NuScenesDataset(torch.utils.data.Dataset):
         sample_data['depth_batch'] = torch.FloatTensor(depth_map)
         sample_data['bbox_batch'] = torch.FloatTensor(bbox)
         sample_data['K_batch'] = torch.FloatTensor(K)
-
-        # if self.debug:
-        #     print(
-        #         f'        tgt instance id: {tgt_ins_id}, '
-        #         f'lidar pts cnt: {lidar_cnt} ')
-        #
-        #     camtoken = sample_record['data'][cam]
-        #     fig, axes = plt.subplots(1, 2, figsize=(18, 9))
-        #
-        #     # draw object box on the image
-        #     img2 = np.copy(img)
-        #     corners_3d = corners_of_box(obj_pose, wlh, is_kitti=False)
-        #     pred_uv = view_points(
-        #         corners_3d,
-        #         camera_intrinsic, normalize=True)
-        #     c = np.array([0, 255, 0]).astype(np.float)
-        #     img2 = render_box(img2, pred_uv, colors=(c, c, c))
-        #     if self.add_pose_err > 0:
-        #         corners_3d_w_err = corners_of_box(obj_pose_w_err, wlh, is_kitti=False)
-        #         # corners_3d_w_err = np.array(objects_pred['corners_3d'][asso_obx_id]).T
-        #         pred_uv_w_err = view_points(
-        #             corners_3d_w_err,
-        #             camera_intrinsic, normalize=True)
-        #         c = np.array([255, 0, 0]).astype(np.float)
-        #         img2 = render_box(img2, pred_uv_w_err, colors=(c, c, c))
-        #     axes[0].imshow(img2)
-        #     axes[0].set_title(self.nusc.get('sample_data', camtoken)['channel'])
-        #     axes[0].axis('off')
-        #     axes[0].set_aspect('equal')
-        #     # c = np.array(self.nusc.colormap[box.name]) / 255.0
-        #     # box.render(axes[0], view=camera_intrinsic, normalize=True, colors=(c, c, c))
-        #
-        #     if self.seg_type == 'panoptic':
-        #         seg_vis = pan2ins_vis(pan_label, name2label[self.seg_cat][2], self.divisor)
-        #     elif self.seg_type == 'instance':
-        #         seg_vis = ins2vis(ins_masks)
-        #     axes[1].imshow(seg_vis)
-        #     axes[1].set_title('pred instance')
-        #     axes[1].axis('off')
-        #     axes[1].set_aspect('equal')
-        #     # c = np.array(nusc.colormap[box.name]) / 255.0
-        #     min_x, min_y, max_x, max_y = box_2d
-        #     rect = patches.Rectangle((min_x, min_y), max_x - min_x, max_y - min_y,
-        #                              linewidth=2, edgecolor='y', facecolor='none')
-        #     axes[1].add_patch(rect)
-        #
-        #     axes[0].scatter(lidar_pts_im_ann[0, :], lidar_pts_im_ann[1, :], c=lider_pts_depth_ann, s=5)
-        #     axes[1].scatter(lidar_pts_im_ann[0, :], lidar_pts_im_ann[1, :], c=lider_pts_depth_ann, s=5)
-        #
-        #     self.nusc.render_annotation(anntoken, margin=30, box_vis_level=BoxVisibility.ALL)
-        #     plt.tight_layout()
-        #     plt.show()
-        #     print(f"        Lidar pts in target segment: {lidar_cnt}")
-        #     # Nusc claimed pixel ratio visible from 6 cameras, seem not very reliable since no GT amodel segmentation
-        #     visibility_token = sample_ann['visibility_token']
-        #     print("        Visibility: {}".format(self.nusc.get('visibility', visibility_token)))
 
         return sample_data
 

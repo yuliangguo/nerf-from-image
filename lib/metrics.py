@@ -27,7 +27,7 @@ def range_check(im):
         assert im.min() > -eps, 'Range check failed'
 
 
-def psnr(pred, target, reduction='mean'):
+def psnr(pred, target, reduction='mean', mask=None):
     assert pred.shape == target.shape
     assert len(pred.shape) == 4
     assert pred.shape[1] == 3 or pred.shape[-1] == 3  # Ensure RGB image
@@ -35,7 +35,13 @@ def psnr(pred, target, reduction='mean'):
     range_check(target)
     pred = pred.clamp(0, 1)
     target = target.clamp(0, 1)
-    batch_psnr = -10 * torch.log10((pred - target).square().mean(dim=[1, 2, 3]))
+    # Modified to rule out bg color's effect
+    if mask is not None:
+        pred = pred[mask > 0]
+        target = target[mask > 0]
+        batch_psnr = -10 * torch.log10((pred - target).square()).mean()
+    else:
+        batch_psnr = -10 * torch.log10((pred - target).square().mean(dim=[1, 2, 3]))
     # We clamp each sample to max 60 dB, since a pixel-perfect reconstruction
     # would push the mean towards +infinity
     batch_psnr = batch_psnr.clamp(max=60)

@@ -34,7 +34,7 @@ p3d_scene_range = 1.4  # pretrained model is based on this scale
 p3d_focal_guesses = np.asarray([0.71839845,  1.07731938,  1.32769489,  1.59814608,  1.88348041,  2.27928376,
                             2.82873106,  3.73867059,  5.14416647,  9.12456608, 27.79907417])
 # scene_range should match the target testing dataset. NeRF model will scale based on it
-dataset_config = {'scene_range': 3.0, 'camera_flipped': True, 'white_background': False}
+dataset_config = {'scene_range': 3.0, 'camera_flipped': True, 'white_background': True}
 
 
 def render(target_model,
@@ -480,6 +480,7 @@ def optimize_iter(module, rgb_predicted, acc_predicted,
         loss = loss / 2  # Average L1 and VGG
 
     with torch.no_grad():
+        # TODO: also add mask here?
         psnr_monitor = metrics.psnr(rgb_predicted[..., :3] / 2 + 0.5,
                                     target[..., :3] / 2 + 0.5)
         lpips_monitor = module.lpips_net(
@@ -551,7 +552,8 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
 
     psnr = metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
                         target_perm[:, :3] / 2 + 0.5,
-                        reduction='none').cpu()
+                        reduction='none',
+                        mask=target_mask_input.unsqueeze(1).repeat(1,3,1,1)).cpu()
     item['psnr'].append(psnr)
     item['ssim'].append(
         metrics.ssim(rgb_predicted_perm[:, :3] / 2 + 0.5,
@@ -580,7 +582,9 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
     rot_error = pose_utils.rotation_matrix_distance(cam, gt_cam2world_mat)
     item['rot_error'].append(rot_error)
 
-    trans_error = torch.sqrt(torch.sum((cam[:, :3, 3] - gt_cam2world_mat[:, :3, 3])**2))
+    # Trans_error need to be converted back to object space to compute, or the rotation entanglement makes it larger
+    trans_error = torch.sqrt(torch.sum((pose_utils.invert_space(cam)[:, :3, 3] -
+                                        pose_utils.invert_space(gt_cam2world_mat)[:, :3, 3])**2))
     item['trans_error'].append(trans_error)
 
     #
@@ -639,6 +643,7 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
         target_focal_perm = batch_data_perm['K_batch'][0, 0].to(device).unsqueeze(0)
         target_center_perm = batch_data_perm['K_batch'][:2, 2].to(device).unsqueeze(0) + 0.5
         target_img_perm_ = batch_data_perm['img_batch'].to(device).unsqueeze(0)
+        target_mask_perm_ = batch_data_perm['mask_batch'].to(device).unsqueeze(0)
         target_img_perm_ = target_img_perm_.permute(0, 3, 1, 2)
     else:
         # just perturb the original view
@@ -677,7 +682,8 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
     if views_per_object > 1:
         psnr_random = metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
                                    target_img_perm_[:, :3] / 2 + 0.5,
-                                   reduction='none').cpu()
+                                   reduction='none',
+                                   mask=target_mask_perm_.unsqueeze(1).repeat(1,3,1,1)).cpu()
         item['psnr_random'].append(psnr_random)
 
         depth_error_random = torch.mean(torch.abs(gt_depth_perm - depth_predicted)[gt_depth_mask_perm])
@@ -763,7 +769,8 @@ if __name__ == '__main__':
         nusc_version,
         split='val',
         debug=False,
-        external_pose_file=external_pose_file
+        external_pose_file=external_pose_file,
+        white_bkgd=dataset_config['white_background']
     )
 
     nusc_loader = DataLoader(nusc_dataset, batch_size=1, num_workers=4, shuffle=False, pin_memory=True)
@@ -776,8 +783,8 @@ if __name__ == '__main__':
     args.resume_from = 'g_imagenet_car_pretrained'
     args.inv_loss = 'vgg'  # vgg / l1 / mse
     # no_optimize_pose = args.inv_no_optimize_pose
-    no_optimize_pose = True  # for debugging: tmp debug only the nerf given perfect pose
-    init_pose_type = 'external'  # pnp / gt / external
+    no_optimize_pose = False  # for debugging: tmp debug only the nerf given perfect pose
+    init_pose_type = 'pnp'  # pnp / gt / external
 
     args.gpus = 1 if args.gpus >= 1 else 0
     args.inv_export_demo_sample = True
@@ -1018,9 +1025,12 @@ if __name__ == '__main__':
     print('Running...')
     # deal with each detected object in the image
     for idx, batch_data in enumerate(nusc_loader):
+        # if idx < 90:
+        #     continue
         t1 = time.time()
 
         target_img = batch_data['img_batch'].to(device)
+        target_mask_input = batch_data['mask_batch'].to(device)
         # target_img = test_split[
         #     target_img_idx].images  # Target for optimization (always cropped)
         target_img_fid_ = target_img  # Target for evaluation (front view -- always cropped)
@@ -1028,7 +1038,7 @@ if __name__ == '__main__':
         # target_focal = test_split[target_img_idx].focal_length
         # target_focal = None
         target_focal = batch_data['K_batch'][0, 0, 0].to(device)
-        target_center = batch_data['K_batch'][:, :2, 2].to(device) + 0.5 # this is for the rendering range in the given image, None for full patch
+        target_center = batch_data['K_batch'][:, :2, 2].to(device) + 0.5  # this is for the rendering range in the given image, None for full patch
         target_bbox = None  # this is for the rendering range in the given image, in pixels. None for full patch
 
         target_center_fid = batch_data['K_batch'][:, :2, 2].to(device) + 0.5
@@ -1054,7 +1064,10 @@ if __name__ == '__main__':
         # Modified: to use the actual known intrinsics
         with torch.no_grad():
             coord_regressor_img = target_img[..., :3].permute(0, 3, 1, 2)
-
+            # convert back to grey bg since coord regressor was trained with that
+            if dataset_config['white_background']:
+                coord_regressor_img = coord_regressor_img.clone()
+                coord_regressor_img += (target_mask_input.unsqueeze(1) - 1) * 0.5
             target_coords, target_mask, target_w = coord_regressor.module(
                 coord_regressor_img)
             # modified: adjust the scale to target dataset
@@ -1086,7 +1099,7 @@ if __name__ == '__main__':
         else:
             target_tform_cam2world = estimated_cam2world_mat
 
-        # For Debugging: printing the estimated pose and
+        # # For Debugging: printing the estimated pose and
         # print('estimated cam pose')
         # print(target_tform_cam2world[0].cpu().numpy())
         # print('gt cam pose converted')
@@ -1244,7 +1257,7 @@ if __name__ == '__main__':
 
                 print(f'it{it}: psnr avg: {avg_psnr.item()}, depth error avg: {avg_depth_error.item()}, '
                       f'rot error avg: {avg_R_err.item()}, trans error avg: {avg_T_err.item()}, '
-                      f'it{it}: psnr avg: {avg_psnr_cross.item()}, depth error avg: {avg_depth_error_cross.item()}')
+                      f'it{it}: psnr-C avg: {avg_psnr_cross.item()}, depth error-C avg: {avg_depth_error_cross.item()}')
                 print('====================================================')
 
     # final save report
@@ -1275,5 +1288,5 @@ if __name__ == '__main__':
 
         print(f'it{it}: psnr avg: {avg_psnr.item()}, depth error avg: {avg_depth_error.item()}, '
               f'rot error avg: {avg_R_err.item()}, trans error avg: {avg_T_err.item()}, '
-              f'it{it}: psnr avg: {avg_psnr_cross.item()}, depth error avg: {avg_depth_error_cross.item()}')
+              f'it{it}: psnr-C avg: {avg_psnr_cross.item()}, depth error-C avg: {avg_depth_error_cross.item()}')
         print('====================================================')
