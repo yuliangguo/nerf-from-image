@@ -60,11 +60,13 @@ def render(target_model,
 
     ray_directions = F.normalize(ray_directions, dim=-1)
     with torch.no_grad():
-        # TODO: scene_range seems a sensitive factor, a target dataset needs a different range. Need to understand more
+        # Attention: scene_range seems a sensitive factor, the AABB box limits, in physical scale.
+        # The near/far thresh are the intersetion of ins and outs per input ray
         near_thresh, far_thresh = nerf_utils.compute_near_far_planes(
             ray_origins.detach(), ray_directions.detach(),
             dataset_config['scene_range'])
 
+    # These depth_values are distance to camera center, not z-buffer. Random sampling within near and far range
     query_points, depth_values = nerf_utils.compute_query_points_from_rays(
         ray_origins,
         ray_directions,
@@ -212,6 +214,15 @@ def render(target_model,
         normals,
         semantics,
         white_background=dataset_config['white_background'])
+
+    # Modified: convert depth_predicted to z-buffer as common depth map setup
+    tform_world2cam = pose_utils.invert_space(tform_cam2world)
+    view_directions = torch.sum(ray_directions[..., None, :] *
+                                tform_world2cam[:, None, None, :3, :3],
+                                dim=-1)
+    view_points3D = view_directions * depth_predicted.unsqueeze(-1)
+    # Revert sign of default flip camera
+    depth_predicted = view_points3D[..., -1] * (-1)
 
     return rgb_predicted, depth_predicted, mask_predicted, normals_predicted, semantics_predicted, model_outputs
 
@@ -783,8 +794,8 @@ if __name__ == '__main__':
     args.resume_from = 'g_imagenet_car_pretrained'
     args.inv_loss = 'vgg'  # vgg / l1 / mse
     # no_optimize_pose = args.inv_no_optimize_pose
-    no_optimize_pose = False  # for debugging: tmp debug only the nerf given perfect pose
-    init_pose_type = 'pnp'  # pnp / gt / external
+    no_optimize_pose = True  # for debugging: tmp debug only the nerf given perfect pose
+    init_pose_type = 'external'  # pnp / gt / external
 
     args.gpus = 1 if args.gpus >= 1 else 0
     args.inv_export_demo_sample = True
