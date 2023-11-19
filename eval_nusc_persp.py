@@ -560,6 +560,14 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
                 demo_img = torch.cat(
                     (demo_img, normals_predicted.permute(0, 3, 1, 2)),
                     dim=3)
+            # prepare depth map visualization -- normalize with fg values, range to [-1, 1]
+            depth_fg = depth_predicted[target_mask_input > 0]
+            # using fixed range might be better for inaccurate mask
+            depth_vis = (depth_predicted - torch.median(depth_fg)) / 5
+            depth_vis[depth_vis >= 1.0] = 1.0
+            depth_vis[depth_vis < -1.0] = 1.0  # white bg
+            depth_vis = depth_vis.unsqueeze(-1).repeat(1, 1, 1, 3)
+            demo_img = torch.cat((demo_img, depth_vis.permute(0, 3, 1, 2)), dim=3)
 
     psnr = metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
                         target_perm[:, :3] / 2 + 0.5,
@@ -725,7 +733,16 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
                     dim=3)
             # is the novel is from real data, extend with the real image
             if views_per_object > 1:
+                # prepare depth map visualization -- normalize with fg values, range to [-1, 1]
+                depth_fg = depth_predicted[target_mask_perm_ > 0]
+                # using fixed range might be better for inaccurate mask
+                depth_vis = (depth_predicted - torch.median(depth_fg)) / 5.0
+                depth_vis[depth_vis >= 1.0] = 1.0
+                depth_vis[depth_vis < -1.0] = 1.0
+                depth_vis = depth_vis.unsqueeze(-1).repeat(1, 1, 1, 3)
+                demo_img = torch.cat((demo_img, depth_vis.permute(0, 3, 1, 2)), dim=3)
                 demo_img = torch.cat((demo_img, target_img_perm_), dim=3)
+
             # Move the saving code before
             utils.mkdir(out_dir)
             out_fname = f'demo_obj{obj_idx}_{it}it.png'
@@ -1077,6 +1094,7 @@ if __name__ == '__main__':
             coord_regressor_img = target_img[..., :3].permute(0, 3, 1, 2)
             # convert back to grey bg since coord regressor was trained with that
             if dataset_config['white_background']:
+                # convert to white background to grey to match the trained model
                 coord_regressor_img = coord_regressor_img.clone()
                 coord_regressor_img += (target_mask_input.unsqueeze(1) - 1) * 0.5
             target_coords, target_mask, target_w = coord_regressor.module(

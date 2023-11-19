@@ -162,7 +162,9 @@ def compute_pose_pnp_new(coords, masks, intrinsics, refine=True):
 
         solver = main_solver
         best_idx = None
-        while True:
+        max_iter = 5000
+        # while True:
+        for iter in range(max_iter):
             try:
                 retval, rvec, tvec, err = cv2.solvePnPGeneric(pts_xyz,
                                                               pts_screen,
@@ -174,6 +176,8 @@ def compute_pose_pnp_new(coords, masks, intrinsics, refine=True):
                     break
             except:
                 pass
+        if best_idx is None:
+            best_idx = 0
 
         if solver == main_solver:
             solver = fallback_solver
