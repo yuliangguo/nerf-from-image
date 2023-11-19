@@ -561,11 +561,13 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
                     (demo_img, normals_predicted.permute(0, 3, 1, 2)),
                     dim=3)
             # prepare depth map visualization -- normalize with fg values, range to [-1, 1]
-            depth_fg = depth_predicted[target_mask_input > 0]
+            depth_fg = depth_predicted[acc_predicted > 0.5]
             # using fixed range might be better for inaccurate mask
             depth_vis = (depth_predicted - torch.median(depth_fg)) / 5
-            depth_vis[depth_vis >= 1.0] = 1.0
-            depth_vis[depth_vis < -1.0] = 1.0  # white bg
+            if dataset_config['white_background']:
+                depth_vis[acc_predicted < 0.95] = 1.0  # white bg
+            else:
+                depth_vis[acc_predicted < 0.95] = 0.5  # grey bg
             depth_vis = depth_vis.unsqueeze(-1).repeat(1, 1, 1, 3)
             demo_img = torch.cat((demo_img, depth_vis.permute(0, 3, 1, 2)), dim=3)
 
@@ -681,7 +683,7 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
         target_center_perm = target_center
     target_bbox_perm = None
 
-    rgb_predicted, depth_predicted, _, normals_predicted, semantics_predicted, _ = model_to_call(
+    rgb_predicted, depth_predicted, acc_predicted, normals_predicted, semantics_predicted, _ = model_to_call(
         target_tform_cam2world_perm,
         target_focal_perm,
         target_center_perm,
@@ -734,11 +736,13 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
             # is the novel is from real data, extend with the real image
             if views_per_object > 1:
                 # prepare depth map visualization -- normalize with fg values, range to [-1, 1]
-                depth_fg = depth_predicted[target_mask_perm_ > 0]
+                depth_fg = depth_predicted[acc_predicted > 0.5]
                 # using fixed range might be better for inaccurate mask
-                depth_vis = (depth_predicted - torch.median(depth_fg)) / 5.0
-                depth_vis[depth_vis >= 1.0] = 1.0
-                depth_vis[depth_vis < -1.0] = 1.0
+                depth_vis = (depth_predicted - torch.median(depth_fg)) / 5
+                if dataset_config['white_background']:
+                    depth_vis[acc_predicted < 0.95] = 1.0  # white bg
+                else:
+                    depth_vis[acc_predicted < 0.95] = 0.5  # grey bg
                 depth_vis = depth_vis.unsqueeze(-1).repeat(1, 1, 1, 3)
                 demo_img = torch.cat((demo_img, depth_vis.permute(0, 3, 1, 2)), dim=3)
                 demo_img = torch.cat((demo_img, target_img_perm_), dim=3)
