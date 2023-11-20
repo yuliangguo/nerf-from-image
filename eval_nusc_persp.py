@@ -29,6 +29,9 @@ from models import generator
 from models import discriminator
 from models import encoder
 
+"""
+    This one is the full evaluation on NuScenes given accurate intrinsics provided
+"""
 # manually record p3d training distribution
 p3d_scene_range = 1.4  # pretrained model is based on this scale
 p3d_focal_guesses = np.asarray([0.71839845,  1.07731938,  1.32769489,  1.59814608,  1.88348041,  2.27928376,
@@ -567,7 +570,7 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
             if dataset_config['white_background']:
                 depth_vis[acc_predicted < 0.95] = 1.0  # white bg
             else:
-                depth_vis[acc_predicted < 0.95] = 0.5  # grey bg
+                depth_vis[acc_predicted < 0.95] = 0.0  # grey bg
             depth_vis = depth_vis.unsqueeze(-1).repeat(1, 1, 1, 3)
             demo_img = torch.cat((demo_img, depth_vis.permute(0, 3, 1, 2)), dim=3)
 
@@ -733,18 +736,19 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
                 demo_img = torch.cat(
                     (demo_img, normals_predicted.permute(0, 3, 1, 2)),
                     dim=3)
+            # prepare depth map visualization -- normalize with fg values, range to [-1, 1]
+            depth_fg = depth_predicted[acc_predicted > 0.5]
+            # using fixed range might be better for inaccurate mask
+            depth_vis = (depth_predicted - torch.median(depth_fg)) / 5
+            if dataset_config['white_background']:
+                depth_vis[acc_predicted < 0.95] = 1.0  # white bg
+            else:
+                depth_vis[acc_predicted < 0.95] = 0.0  # grey bg
+            depth_vis = depth_vis.unsqueeze(-1).repeat(1, 1, 1, 3)
+            demo_img = torch.cat((demo_img, depth_vis.permute(0, 3, 1, 2)), dim=3)
+
             # is the novel is from real data, extend with the real image
             if views_per_object > 1:
-                # prepare depth map visualization -- normalize with fg values, range to [-1, 1]
-                depth_fg = depth_predicted[acc_predicted > 0.5]
-                # using fixed range might be better for inaccurate mask
-                depth_vis = (depth_predicted - torch.median(depth_fg)) / 5
-                if dataset_config['white_background']:
-                    depth_vis[acc_predicted < 0.95] = 1.0  # white bg
-                else:
-                    depth_vis[acc_predicted < 0.95] = 0.5  # grey bg
-                depth_vis = depth_vis.unsqueeze(-1).repeat(1, 1, 1, 3)
-                demo_img = torch.cat((demo_img, depth_vis.permute(0, 3, 1, 2)), dim=3)
                 demo_img = torch.cat((demo_img, target_img_perm_), dim=3)
 
             # Move the saving code before
@@ -816,7 +820,7 @@ if __name__ == '__main__':
     args.inv_loss = 'vgg'  # vgg / l1 / mse
     # no_optimize_pose = args.inv_no_optimize_pose
     no_optimize_pose = True  # for debugging: tmp debug only the nerf given perfect pose
-    init_pose_type = 'external'  # pnp / gt / external
+    init_pose_type = 'gt'  # pnp / gt / external
 
     args.gpus = 1 if args.gpus >= 1 else 0
     args.inv_export_demo_sample = True
@@ -1281,13 +1285,6 @@ if __name__ == '__main__':
                 # avg_ssim = torch.mean(torch.stack(report[it]['ssim']))
                 # avg_lpips = torch.mean(torch.stack(report[it]['lpips']))
 
-                # print(f'Average psnr at {it}it: {avg_psnr}')
-                # print(f'Average depth error at {it}it: {avg_depth_error}')
-                # print(f'Average Rotation Error at {it}it: {avg_R_err}')
-                # print(f'Average Rotation Error at {it}it: {avg_T_err}')
-                # print(f'Average ssim at {it}it: {avg_ssim}')
-                # print(f'Average lpips at {it}it: {avg_lpips}')
-
                 print(f'it{it}: psnr avg: {avg_psnr.item()}, depth error avg: {avg_depth_error.item()}, '
                       f'rot error avg: {avg_R_err.item()}, trans error avg: {avg_T_err.item()}, '
                       f'it{it}: psnr-C avg: {avg_psnr_cross.item()}, depth error-C avg: {avg_depth_error_cross.item()}')
@@ -1311,13 +1308,6 @@ if __name__ == '__main__':
         avg_depth_error_cross = torch.mean(depth_errors_cross[~torch.isnan(depth_errors_cross)])
         # avg_ssim = torch.mean(torch.stack(report[it]['ssim']))
         # avg_lpips = torch.mean(torch.stack(report[it]['lpips']))
-
-        # print(f'Average psnr at {it}it: {avg_psnr}')
-        # print(f'Average depth error at {it}it: {avg_depth_error}')
-        # print(f'Average Rotation Error at {it}it: {avg_R_err}')
-        # print(f'Average Rotation Error at {it}it: {avg_T_err}')
-        # print(f'Average ssim at {it}it: {avg_ssim}')
-        # print(f'Average lpips at {it}it: {avg_lpips}')
 
         print(f'it{it}: psnr avg: {avg_psnr.item()}, depth error avg: {avg_depth_error.item()}, '
               f'rot error avg: {avg_R_err.item()}, trans error avg: {avg_T_err.item()}, '

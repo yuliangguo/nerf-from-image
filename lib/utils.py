@@ -215,3 +215,52 @@ def pts_in_box_3d(pts_3d, corners_3d, keep_top_portion=1.0):
 
     subset_final = np.logical_and(subset1, np.logical_and(subset2, subset3))
     return np.squeeze(subset_final)
+
+
+def corners_of_box(obj_pose, wlh, is_kitti=False):
+    """
+            Modified from NUSC
+
+    Returns the bounding box corners.
+    :return: <np.float: 3, 8>. First four corners are the ones facing forward.
+        The last four are the ones facing backwards.
+    """
+    w, l, h = wlh
+
+    if is_kitti:
+        # the order (identity) need to follow nusc
+        x_corners = l / 2 * np.array([1, 1, 1, 1, -1, -1, -1, -1])
+        y_corners = h / 2 * np.array([-2, -2, 0, 0, -2, -2, 0, 0])
+        z_corners = w / 2 * np.array([1, -1, -1, 1, 1, -1, -1, 1])
+    else:
+        # 3D bounding box corners. (Convention: x forward, y left, z up.)
+        x_corners = l / 2 * np.array([1, 1, 1, 1, -1, -1, -1, -1])
+        y_corners = w / 2 * np.array([1, -1, -1, 1, 1, -1, -1, 1])
+        z_corners = h / 2 * np.array([1, 1, -1, -1, 1, 1, -1, -1])
+    corners = np.vstack((x_corners, y_corners, z_corners))
+
+    # Rotate
+    corners = np.dot(obj_pose[:, :3], corners)
+
+    # Translate
+    x, y, z = obj_pose[:, 3]
+    corners[0, :] = corners[0, :] + x
+    corners[1, :] = corners[1, :] + y
+    corners[2, :] = corners[2, :] + z
+
+    return corners
+
+
+def obj_pose_kitti2nusc(obj_pose_src, obj_h):
+    """
+        Operate at batch level
+    """
+    pose_R = obj_pose_src[:, :, :3]
+    pose_T = obj_pose_src[:, :, 3:]
+    pose_T[:, 1, 0] -= (obj_h/2)
+    R_x = np.array([[1., 0., 0.],
+                    [0., 0., -1.],
+                    [0., 1., 0.]]).astype(np.float32)
+    R_x = torch.from_numpy(R_x).unsqueeze(0).repeat(obj_pose_src.shape[0], 1, 1)
+    pose_R = torch.matmul(pose_R, R_x)
+    return torch.cat([pose_R, pose_T], dim=-1)
