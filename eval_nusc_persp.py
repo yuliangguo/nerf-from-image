@@ -36,8 +36,6 @@ from models import encoder
 p3d_scene_range = 1.4  # pretrained model is based on this scale
 p3d_focal_guesses = np.asarray([0.71839845,  1.07731938,  1.32769489,  1.59814608,  1.88348041,  2.27928376,
                             2.82873106,  3.73867059,  5.14416647,  9.12456608, 27.79907417])
-# scene_range should match the target testing dataset. NeRF model will scale based on it
-dataset_config = {'scene_range': 3.0, 'camera_flipped': True, 'white_background': True}
 
 
 def render(target_model,
@@ -786,6 +784,15 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
 
 
 if __name__ == '__main__':
+    # scene_range should match the target testing dataset. NeRF model will scale based on it
+    dataset_config = {'scene_range': 3.0, 'camera_flipped': True, 'white_background': True}
+    args = arguments.parse_args()
+    args.resume_from = 'g_imagenet_car_pretrained'
+    args.inv_loss = 'vgg'  # vgg / l1 / mse
+    # no_optimize_pose = args.inv_no_optimize_pose
+    no_optimize_pose = False  # for debugging: tmp debug only the nerf given perfect pose
+    init_pose_type = 'pnp'  # pnp / gt / external
+
     # exp_name = 'nusc_' + datetime.now().strftime('_%Y_%m_%d_%H_%M_%S')
     exp_name = 'nusc_' + date.today().strftime('_%Y_%m_%d')
     out_dir = os.path.join('outputs', exp_name)
@@ -814,13 +821,6 @@ if __name__ == '__main__':
     """
         got the minimal viable portion to model to run
     """
-
-    args = arguments.parse_args()
-    args.resume_from = 'g_imagenet_car_pretrained'
-    args.inv_loss = 'vgg'  # vgg / l1 / mse
-    # no_optimize_pose = args.inv_no_optimize_pose
-    no_optimize_pose = True  # for debugging: tmp debug only the nerf given perfect pose
-    init_pose_type = 'gt'  # pnp / gt / external
 
     args.gpus = 1 if args.gpus >= 1 else 0
     args.inv_export_demo_sample = True
