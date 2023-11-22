@@ -264,3 +264,25 @@ def obj_pose_kitti2nusc(obj_pose_src, obj_h):
     R_x = torch.from_numpy(R_x).unsqueeze(0).repeat(obj_pose_src.shape[0], 1, 1)
     pose_R = torch.matmul(pose_R, R_x)
     return torch.cat([pose_R, pose_T], dim=-1)
+
+
+def fix_random_seed(seed: int):
+    """
+    Fix random seed for reproducibility
+
+    Args:
+        seed (int): random seed
+    """
+    import random
+
+    import numpy
+    import torch
+
+    random.seed(seed)
+    numpy.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False

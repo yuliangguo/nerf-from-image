@@ -821,7 +821,8 @@ if __name__ == '__main__':
     # args.fine_sampling = True
     # no_optimize_pose = args.inv_no_optimize_pose
     no_optimize_pose = False  # for debugging: tmp debug only the nerf given perfect pose
-    init_pose_type = 'pnp'  # pnp / gt / external
+    init_pose_type = 'external'  # pnp / gt / external
+    utils.fix_random_seed(543)
 
     exp_name = f'nusc_init_{init_pose_type}_opt_pose_{no_optimize_pose==False}' + datetime.now().strftime('_%Y_%m_%d_%H')
     # exp_name = f'nusc_init_{init_pose_type}_opt_pose_{no_optimize_pose==False}' + date.today().strftime('_%Y_%m_%d')
