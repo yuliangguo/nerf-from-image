@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import torchvision
 import time
 import random
+import cv2
 from scipy.spatial.transform import Rotation as R
 from datetime import date, datetime
 import sys
@@ -553,14 +554,16 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
                         * target_mask.unsqueeze(1))
                 coords_img /= dataset_config['scene_range']
                 coords_img.clamp_(-1, 1)
+                coords_img_empty = torch.full_like(coords_img, 0)
                 if dataset_config['white_background']:
                     coords_img += 1 - target_mask.unsqueeze(1)
-                demo_img = torch.cat((demo_img, coords_img), dim=3)
+                    coords_img_empty += 1
+                if init_pose_type == "external":
+                    demo_img = torch.cat((demo_img, coords_img_empty), dim=3)
+                else:
+                    demo_img = torch.cat((demo_img, coords_img), dim=3)
             demo_img = torch.cat((demo_img, rgb_predicted_perm), dim=3)
-            if normals_predicted is not None:
-                demo_img = torch.cat(
-                    (demo_img, normals_predicted.permute(0, 3, 1, 2)),
-                    dim=3)
+
             # prepare depth map visualization -- normalize with fg values, range to [-1, 1]
             depth_fg = depth_predicted[acc_predicted > 0.5]
             # using fixed range might be better for inaccurate mask
@@ -577,6 +580,11 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
 
             depth_vis = depth_vis.unsqueeze(-1).repeat(1, 1, 1, 3)
             demo_img = torch.cat((demo_img, depth_vis.permute(0, 3, 1, 2)), dim=3)
+
+            if normals_predicted is not None:
+                demo_img = torch.cat(
+                    (demo_img, normals_predicted.permute(0, 3, 1, 2)),
+                    dim=3)
 
     psnr = metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
                         target_perm[:, :3] / 2 + 0.5,
@@ -736,11 +744,12 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
 
     if export_sample:
         with torch.no_grad():
+            # is the novel is from real data, extend with the real image
+            if views_per_object > 1:
+                demo_img = torch.cat((demo_img, target_img_perm_), dim=3)
+
             demo_img = torch.cat((demo_img, rgb_predicted_perm), dim=3)
-            if normals_predicted is not None:
-                demo_img = torch.cat(
-                    (demo_img, normals_predicted.permute(0, 3, 1, 2)),
-                    dim=3)
+
             # prepare depth map visualization -- normalize with fg values, range to [-1, 1]
             depth_fg = depth_predicted[acc_predicted > 0.5]
             # using fixed range might be better for inaccurate mask
@@ -752,16 +761,29 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
             depth_vis = depth_vis.unsqueeze(-1).repeat(1, 1, 1, 3)
             demo_img = torch.cat((demo_img, depth_vis.permute(0, 3, 1, 2)), dim=3)
 
-            # is the novel is from real data, extend with the real image
+            if normals_predicted is not None:
+                demo_img = torch.cat(
+                    (demo_img, normals_predicted.permute(0, 3, 1, 2)),
+                    dim=3)
+
+            # print the eval message on the demo image
+            eval_str = 'PSNR: {:.2f},  Depth Err: {:.2f}, R Err: {:.2f}, T Err: {:.2f}'.format(
+                psnr.item(), depth_error.item(), rot_error.item(), trans_error.item())
+            demo_img = ((demo_img.permute(0, 2, 3, 1).squeeze().detach().cpu().numpy() / 2 + 0.5) * 255).astype(
+                np.uint8)
+            demo_img = cv2.putText(demo_img.copy(), eval_str, (260, 10), cv2.FONT_HERSHEY_SIMPLEX, .4, (0, 0, 0))
             if views_per_object > 1:
-                demo_img = torch.cat((demo_img, target_img_perm_), dim=3)
+                eval_str2 = 'PSNR-C: {:.2f},  Depth Err-C: {:.2f}'.format(
+                    psnr_random.item(), depth_error_random.item())
+                demo_img = cv2.putText(demo_img.copy(), eval_str2, (770, 10), cv2.FONT_HERSHEY_SIMPLEX, .4, (0, 0, 0))
+            demo_img = torch.from_numpy(demo_img.astype(np.float32) / 255).unsqueeze(0).permute(0, 3, 1, 2)
 
             # Move the saving code before
             utils.mkdir(out_dir)
             out_fname = f'demo_obj{obj_idx}_{it}it.png'
             out_path = os.path.join(out_dir, out_fname)
             print('Saving demo output to', out_path)
-            torchvision.utils.save_image(demo_img / 2 + 0.5,
+            torchvision.utils.save_image(demo_img,
                                          out_path,
                                          nrow=1,
                                          padding=0)
@@ -799,12 +821,14 @@ if __name__ == '__main__':
     # args.fine_sampling = True
     # no_optimize_pose = args.inv_no_optimize_pose
     no_optimize_pose = False  # for debugging: tmp debug only the nerf given perfect pose
-    init_pose_type = 'external'  # pnp / gt / external
+    init_pose_type = 'pnp'  # pnp / gt / external
 
-    exp_name = f'nusc_init_{init_pose_type}_opt_pose_{no_optimize_pose==False}' + date.today().strftime('_%Y_%m_%d')
+    exp_name = f'nusc_init_{init_pose_type}_opt_pose_{no_optimize_pose==False}' + datetime.now().strftime('_%Y_%m_%d_%H')
+    # exp_name = f'nusc_init_{init_pose_type}_opt_pose_{no_optimize_pose==False}' + date.today().strftime('_%Y_%m_%d')
     out_dir = os.path.join('outputs', exp_name)
     if not os.path.exists(out_dir):
         os.mkdir(out_dir)
+    print(f'Saving results to: {out_dir}')
 
     nusc_data_dir = '/mnt/SSD4TB/Datasets/NuScenes/v1.0-mini-full'
     nusc_seg_dir = os.path.join(nusc_data_dir, 'pred_instance')
