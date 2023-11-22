@@ -988,8 +988,6 @@ class NuScenesDataset(torch.utils.data.Dataset):
         impath, _, camera_intrinsic = self.nusc.get_sample_data(cam_data['token'], box_vis_level=BoxVisibility.ANY)
 
         # load image
-        # img_org = Image.open(impath)
-        # img_org = np.asarray(img_org)
         img_org = imageio.imread(impath)
 
         # load mask-rcnn predicted instance masks and 2D boxes
@@ -1008,6 +1006,7 @@ class NuScenesDataset(torch.utils.data.Dataset):
                 # enlarge pred_box
                 # box_2d = roi_resize(box_2d, ratio=self.box2d_rz_ratio)
                 rois.append(box_2d)
+                # TODO: now the box patches are predicted from mask-rcnn, getting GT object pose needs same matching
         if len(rois) == 0:
             print('No valid objects found in the Image!')
             return None
@@ -1029,51 +1028,56 @@ class NuScenesDataset(torch.utils.data.Dataset):
         sample_data['rois'] = torch.from_numpy(np.asarray(rois).astype(np.int32))
         sample_data['cam_intrinsics'] = torch.from_numpy(camera_intrinsic.astype(np.float32))
 
-        # prepared square boxes and crops
-        images = []
-        masks = []
-        bboxes = []
-        Ks = []
+        img_batch = []
+        mask_batch = []
+        bbox_batch = []
+        K_batch = []
 
         for ii, bbox in enumerate(rois):
-            bbox = CustomDataset.square_bbox(bbox)
-            max_res = max(img_org.shape[0], img_org.shape[1])
-
+            box_2d = bbox.copy()
+            bbox = CustomDataset.square_bbox(box_2d)
             K = camera_intrinsic.copy()
-            # important! sfm_pose must not be overwritten -- it is already in the correct reference frame
-            img = img_org.astype(np.float32).copy()/255.
+
+            img = img_org.astype(np.float32).copy() / 255.
             img = CustomDataset.crop(img, bbox, bgval=1)
-            mask = ins_masks[ii].copy()[:, :, None]/255
+            mask = (masks_occ[ii] > 0).astype(np.float32)[:, :, None]
             mask = CustomDataset.crop(mask, bbox, bgval=0)
-            K[0, 2] -= bbox[0]
-            K[1, 2] -= bbox[1]
+            K[0, 2] -= (bbox[0] + bbox[2]) / 2
+            K[1, 2] -= (bbox[1] + bbox[3]) / 2
 
             # Scale image so largest bbox size is img_size
             bwidth = np.shape(img)[0]
             bheight = np.shape(img)[1]
             scale = self.img_size / float(max(bwidth, bheight))
             img, _ = CustomDataset.resize_img(img, scale)
-            mask, _ = CustomDataset.resize_img(mask, scale)
-            K[:2, :] *= scale
+            # mask, _ = CustomDataset.resize_img(mask, scale)
+            mask = cv2.resize(mask, (self.img_size, self.img_size), interpolation=cv2.INTER_NEAREST)
+            # K[:2, :] *= scale
+            K[0, :] /= float(max(bwidth, bheight))
+            K[1, :] /= float(max(bwidth, bheight))
 
             # Finally transpose the image to 3xHxW
             img = np.transpose(img, (2, 0, 1))
 
             mask = mask[None, :, :]
-            img = img * 2 - 1
-            img *= mask
+            if self.white_bkgd:
+                img *= mask
+                img -= (mask - 1)
+                img = img * 2 - 1
+            else:  # grey bg
+                img = img * 2 - 1
+                img *= mask
             img = torch.FloatTensor(img).permute(1, 2, 0)
 
-            images.append(img.unsqueeze(0))
-            masks.append(torch.FloatTensor(mask))
-            bboxes.append(torch.FloatTensor(bbox).unsqueeze(0))
-            Ks.append(torch.FloatTensor(K).unsqueeze(0))
+            img_batch.append(img.unsqueeze(0))
+            mask_batch.append(torch.FloatTensor(mask))
+            bbox_batch.append(torch.FloatTensor(bbox).unsqueeze(0))
+            K_batch.append(torch.FloatTensor(K).unsqueeze(0))
 
-        # TODO: need to sync with the right setup updated in __getitem__
-        sample_data['images'] = torch.cat(images, dim=0)
-        sample_data['masks'] = torch.cat(masks, dim=0)
-        sample_data['bboxes'] = torch.cat(bboxes, dim=0)
-        sample_data['Ks'] = torch.cat(Ks, dim=0)
+        sample_data['img_batch'] = torch.cat(img_batch, dim=0)
+        sample_data['mask_batch'] = torch.cat(mask_batch, dim=0)
+        sample_data['bbox_batch'] = torch.cat(bbox_batch, dim=0)
+        sample_data['K_batch'] = torch.cat(K_batch, dim=0)
 
         return sample_data
 

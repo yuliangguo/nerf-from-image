@@ -681,13 +681,13 @@ if __name__ == '__main__':
     args = arguments.parse_args()
     args.resume_from = 'g_imagenet_car_pretrained'
     args.inv_loss = 'vgg'  # vgg / l1 / mse
+    args.fine_sampling = False
     # no_optimize_pose = args.inv_no_optimize_pose
     no_optimize_pose = False  # for debugging: tmp debug only the nerf given perfect pose
     init_pose_type = 'pnp'  # pnp / gt / external
     max_num_samples = 1000
 
-    # exp_name = 'nusc_' + datetime.now().strftime('_%Y_%m_%d_%H_%M_%S')
-    exp_name = 'kitti_' + date.today().strftime('_%Y_%m_%d')
+    exp_name = f'kitti_init_{init_pose_type}_opt_pose_{no_optimize_pose==False}_fine_sample_{args.fine_sampling}' + date.today().strftime('_%Y_%m_%d')
     out_dir = os.path.join('outputs', exp_name)
     if not os.path.exists(out_dir):
         os.mkdir(out_dir)
@@ -1056,8 +1056,8 @@ if __name__ == '__main__':
                 target_bbox,
                 z_ * lr_gain_z,
                 use_ema=True,
-                ray_multiplier=1 if args.fine_sampling else 4,
-                res_multiplier=1,
+                # ray_multiplier=1 if args.fine_sampling else 2,
+                # res_multiplier=1,
                 compute_normals=False and args.use_sdf,
                 force_no_cam_grad=no_optimize_pose,
                 closure=optimize_iter,
