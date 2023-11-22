@@ -569,6 +569,12 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
                 depth_vis[acc_predicted < 0.95] = 1.0  # white bg
             else:
                 depth_vis[acc_predicted < 0.95] = 0.0  # grey bg
+
+            # depth_vis[depth_predicted == depth_fg.max()] = -1.
+            # temp debug
+            # depth_vis[gt_depth_mask] = -1
+            # depth_vis[torch.logical_and(gt_depth_mask, target_mask_input)] = -1
+
             depth_vis = depth_vis.unsqueeze(-1).repeat(1, 1, 1, 3)
             demo_img = torch.cat((demo_img, depth_vis.permute(0, 3, 1, 2)), dim=3)
 
@@ -598,7 +604,7 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
     #                 rgb_predicted_perm[:, :3] / 2 + 0.5)))
     # if not (args.dataset == 'p3d_car' and use_testset):
     # Ground-truth poses are not available on P3D Car (test set)
-    depth_error = torch.mean(torch.abs(gt_depth - depth_predicted)[gt_depth_mask])
+    depth_error = torch.mean(torch.abs(gt_depth - depth_predicted)[torch.logical_and(gt_depth_mask, target_mask_input)])
     item['depth_error'].append(depth_error)
 
     rot_error = pose_utils.rotation_matrix_distance(cam, gt_cam2world_mat)
@@ -708,7 +714,8 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
                                    mask=target_mask_perm_.unsqueeze(1).repeat(1,3,1,1)).cpu()
         item['psnr_random'].append(psnr_random)
 
-        depth_error_random = torch.mean(torch.abs(gt_depth_perm - depth_predicted)[gt_depth_mask_perm])
+        depth_error_random = torch.mean(
+            torch.abs(gt_depth_perm - depth_predicted)[torch.logical_and(gt_depth_mask_perm, target_mask_perm_)])
         item['depth_error_random'].append(depth_error_random)
 
         item['ssim_random'].append(
@@ -789,23 +796,23 @@ if __name__ == '__main__':
     args = arguments.parse_args()
     args.resume_from = 'g_imagenet_car_pretrained'
     args.inv_loss = 'vgg'  # vgg / l1 / mse
-    args.fine_sampling = False
+    # args.fine_sampling = True
     # no_optimize_pose = args.inv_no_optimize_pose
     no_optimize_pose = False  # for debugging: tmp debug only the nerf given perfect pose
-    init_pose_type = 'pnp'  # pnp / gt / external
+    init_pose_type = 'external'  # pnp / gt / external
 
-    exp_name = f'nusc_init_{init_pose_type}_opt_pose_{no_optimize_pose==False}_fine_sample_{args.fine_sampling}' + date.today().strftime('_%Y_%m_%d')
+    exp_name = f'nusc_init_{init_pose_type}_opt_pose_{no_optimize_pose==False}' + date.today().strftime('_%Y_%m_%d')
     out_dir = os.path.join('outputs', exp_name)
     if not os.path.exists(out_dir):
         os.mkdir(out_dir)
 
-    nusc_data_dir = '/media/yuliangguo/data_ssd_4tb/Datasets/nuscenes_yuliang/v1.0-mini_full'
+    nusc_data_dir = '/mnt/SSD4TB/Datasets/NuScenes/v1.0-mini-full'
     nusc_seg_dir = os.path.join(nusc_data_dir, 'pred_instance')
     nusc_version = 'v1.0-mini'
 
     # upnerf result file
-    # external_pose_file = '/mnt/LinuxDataFast/Projects/nerf-auto-driving/exps_nuscenes_unipnerf/vehicle.car.v1.0-trainval.use_instance.bsize24.e_rate1.0_2023_03_08/test_nuscenes_opt_pose_1_poss_err_full_reg_iters_3_epoch_39_3/codes+poses.pth'
-    external_pose_file = None
+    external_pose_file = '/mnt/LinuxDataFast/Projects/nerf-auto-driving/exps_nuscenes_unipnerf/vehicle.car.v1.0-trainval.use_instance.bsize24.e_rate1.0_2023_03_08/test_nuscenes_opt_pose_1_poss_err_full_reg_iters_3_epoch_39_20231116/codes+poses.pth'
+    # external_pose_file = None
 
     nusc_dataset = NuScenesDataset(
         nusc_data_dir,
@@ -966,7 +973,6 @@ if __name__ == '__main__':
     lr_gain_z = args.inv_gain_z
     inv_no_split = args.inv_no_split
 
-
     # if args.inv_manual_input_path:
     #     # Demo inference on manually supplied image
     batch_size = 1
@@ -1062,8 +1068,6 @@ if __name__ == '__main__':
     print('Running...')
     # deal with each detected object in the image
     for idx, batch_data in enumerate(nusc_loader):
-        # if idx < 90:
-        #     continue
         t1 = time.time()
 
         target_img = batch_data['img_batch'].to(device)

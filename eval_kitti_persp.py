@@ -598,7 +598,7 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
     #                 rgb_predicted_perm[:, :3] / 2 + 0.5)))
     # if not (args.dataset == 'p3d_car' and use_testset):
     # Ground-truth poses are not available on P3D Car (test set)
-    depth_error = torch.mean(torch.abs(gt_depth - depth_predicted)[gt_depth_mask])
+    depth_error = torch.mean(torch.abs(gt_depth - depth_predicted)[torch.logical_and(gt_depth_mask, target_mask_input)])
     item['depth_error'].append(depth_error)
 
     rot_error = pose_utils.rotation_matrix_distance(cam, gt_cam2world_mat)
@@ -681,13 +681,13 @@ if __name__ == '__main__':
     args = arguments.parse_args()
     args.resume_from = 'g_imagenet_car_pretrained'
     args.inv_loss = 'vgg'  # vgg / l1 / mse
-    args.fine_sampling = False
+    # args.fine_sampling = True
     # no_optimize_pose = args.inv_no_optimize_pose
     no_optimize_pose = False  # for debugging: tmp debug only the nerf given perfect pose
-    init_pose_type = 'pnp'  # pnp / gt / external
+    init_pose_type = 'external'  # pnp / gt / external
     max_num_samples = 1000
 
-    exp_name = f'kitti_init_{init_pose_type}_opt_pose_{no_optimize_pose==False}_fine_sample_{args.fine_sampling}' + date.today().strftime('_%Y_%m_%d')
+    exp_name = f'kitti_init_{init_pose_type}_opt_pose_{no_optimize_pose==False}' + date.today().strftime('_%Y_%m_%d')
     out_dir = os.path.join('outputs', exp_name)
     if not os.path.exists(out_dir):
         os.mkdir(out_dir)
@@ -892,7 +892,6 @@ if __name__ == '__main__':
             'ssim_random': [],
             'iou': [],
             'depth_error': [],
-            'depth_error_random': [],
             'rot_error': [],
             'trans_error': [],
             'inception_activations_front': [],  # Front view
