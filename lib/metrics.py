@@ -47,7 +47,7 @@ def psnr(pred, target, reduction='mean', mask=None):
         batch_psnr = -10 * torch.log10((pred - target).square().mean(dim=[1, 2, 3]))
     # We clamp each sample to max 60 dB, since a pixel-perfect reconstruction
     # would push the mean towards +infinity
-    batch_psnr = batch_psnr.clamp(max=30)
+    batch_psnr = batch_psnr.clamp(max=60)
     if reduction == 'mean':
         return batch_psnr.mean()
     else:
