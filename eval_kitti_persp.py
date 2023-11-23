@@ -14,6 +14,7 @@ import math
 from torch.utils import tensorboard
 from torch import nn
 from torch.utils.data import DataLoader
+from torchvision.transforms import Resize
 from tqdm import tqdm
 
 import arguments
@@ -580,10 +581,20 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
                     (demo_img, normals_predicted.permute(0, 3, 1, 2)),
                     dim=3)
 
-    psnr = metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
-                        target_perm[:, :3] / 2 + 0.5,
-                        reduction='none').cpu()
-                        # mask=target_mask_input.unsqueeze(1).repeat(1,3,1,1)).cpu()
+    # psnr = metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
+    #                     target_perm[:, :3] / 2 + 0.5,
+    #                     reduction='none').cpu()
+    #                     # mask=target_mask_input.unsqueeze(1).repeat(1,3,1,1)).cpu()
+    psnr_src = (rgb_predicted_perm[:, :3] / 2 + 0.5)
+    psnr_src = Resize((32, 32))(psnr_src)
+    psnr_tgt = (target_perm[:, :3] / 2 + 0.5)
+    psnr_tgt = Resize((32, 32))(psnr_tgt)
+    psnr_mask = target_mask_input.unsqueeze(1).repeat(1, 3, 1, 1)
+    psnr_mask = Resize((32, 32), interpolation=torchvision.transforms.InterpolationMode.NEAREST)(psnr_mask)
+    psnr = metrics.psnr(psnr_src,
+                        psnr_tgt,
+                        reduction='none',
+                        mask=psnr_mask).cpu()
     item['psnr'].append(psnr)
     item['ssim'].append(
         metrics.ssim(rgb_predicted_perm[:, :3] / 2 + 0.5,
@@ -701,7 +712,7 @@ if __name__ == '__main__':
     # args.fine_sampling = True
     # no_optimize_pose = args.inv_no_optimize_pose
     no_optimize_pose = False  # for debugging: tmp debug only the nerf given perfect pose
-    init_pose_type = 'pnp'  # pnp / gt / external
+    init_pose_type = 'external'  # pnp / gt / external
     gpu_ids = [0]
     max_num_samples = 250
     utils.fix_random_seed(543)
@@ -713,10 +724,10 @@ if __name__ == '__main__':
         os.mkdir(out_dir)
     print(f'Saving results to: {out_dir}')
 
-    kitti_data_dir = '/mnt/SSD4TB/Datasets/KITTI_Det3D'
+    kitti_data_dir = '/media/yuliangguo/data_ssd_4tb/Datasets/kitti'
 
     # upnerf result file
-    external_pose_file = '/mnt/LinuxDataFast/Projects/nerf-auto-driving/exps_nuscenes_unipnerf/vehicle.car.v1.0-trainval.use_instance.bsize24.e_rate1.0_2023_03_08/test_kitti_opt_pose_1_poss_err_full_reg_iters_3_epoch_39_20231120/codes+poses.pth'
+    external_pose_file = '/home/yuliangguo/Projects/nerf-auto-driving/exps_nuscenes_unipnerf/vehicle.car.v1.0-trainval.use_instance.bsize24.e_rate1.0_2023_03_08/test_kitti_opt_pose_1_poss_err_full_reg_iters_3_epoch_39_20231120/codes+poses.pth'
     # external_pose_file = None
 
     kitti_dataset = KittiDataset(
