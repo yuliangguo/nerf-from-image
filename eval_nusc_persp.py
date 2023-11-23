@@ -820,8 +820,9 @@ if __name__ == '__main__':
     args.inv_loss = 'vgg'  # vgg / l1 / mse
     # args.fine_sampling = True
     # no_optimize_pose = args.inv_no_optimize_pose
-    no_optimize_pose = False  # for debugging: tmp debug only the nerf given perfect pose
-    init_pose_type = 'pnp'  # pnp / gt / external
+    no_optimize_pose = True  # for debugging: tmp debug only the nerf given perfect pose
+    init_pose_type = 'gt'  # pnp / gt / external
+    gpu_ids = [3]
     utils.fix_random_seed(543)
 
     exp_name = f'nusc_init_{init_pose_type}_opt_pose_{no_optimize_pose==False}' + datetime.now().strftime('_%Y_%m_%d_%H')
@@ -831,12 +832,12 @@ if __name__ == '__main__':
         os.mkdir(out_dir)
     print(f'Saving results to: {out_dir}')
 
-    nusc_data_dir = '/mnt/SSD4TB/Datasets/NuScenes/v1.0-mini-full'
+    nusc_data_dir = '/data_ssd/guo1syv/Datasets/nuscenes/v1.0-mini-full'
     nusc_seg_dir = os.path.join(nusc_data_dir, 'pred_instance')
     nusc_version = 'v1.0-mini'
 
     # upnerf result file
-    external_pose_file = '/mnt/LinuxDataFast/Projects/nerf-auto-driving/exps_nuscenes_unipnerf/vehicle.car.v1.0-trainval.use_instance.bsize24.e_rate1.0_2023_03_08/test_nuscenes_opt_pose_1_poss_err_full_reg_iters_3_epoch_39_20231116/codes+poses.pth'
+    external_pose_file = '/data_ssd/guo1syv/Projects/nerf-auto-driving/exps_nuscenes_unipnerf/vehicle.car.v1.0-trainval.use_instance.bsize24.e_rate1.0_2023_03_08/test_nuscenes_opt_pose_1_poss_err_full_reg_iters_3_epoch_39_20231116/codes+poses.pth'
     # external_pose_file = None
 
     nusc_dataset = NuScenesDataset(
@@ -859,10 +860,10 @@ if __name__ == '__main__':
     args.inv_export_demo_sample = True
     if args.inv_export_demo_sample:
         args.run_inversion = True
-    gpu_ids = list(range(args.gpus))
+    # gpu_ids = list(range(args.gpus))
 
     if args.gpus > 0 and torch.cuda.is_available():
-        device = torch.device('cuda')
+        device = torch.device(f'cuda:{gpu_ids[0]}')
     else:
         device = torch.device('cpu')
 

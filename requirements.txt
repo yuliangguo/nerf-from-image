@@ -1,6 +1,5 @@
 torch
 torchvision
-Pillow==9.5.0
 imageio
 opencv-python
 tensorboard

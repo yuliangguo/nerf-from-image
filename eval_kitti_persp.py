@@ -702,6 +702,7 @@ if __name__ == '__main__':
     # no_optimize_pose = args.inv_no_optimize_pose
     no_optimize_pose = False  # for debugging: tmp debug only the nerf given perfect pose
     init_pose_type = 'pnp'  # pnp / gt / external
+    gpu_ids = [0]
     max_num_samples = 250
     utils.fix_random_seed(543)
 
@@ -734,10 +735,10 @@ if __name__ == '__main__':
     args.inv_export_demo_sample = True
     if args.inv_export_demo_sample:
         args.run_inversion = True
-    gpu_ids = list(range(args.gpus))
+    # gpu_ids = list(range(args.gpus))
 
     if args.gpus > 0 and torch.cuda.is_available():
-        device = torch.device('cuda')
+        device = torch.device(f'cuda:{gpu_ids[0]}') 
     else:
         device = torch.device('cpu')
 

@@ -5,3 +5,4 @@ datasets
 gan_checkpoints
 outputs
 reports
+gan_logs
