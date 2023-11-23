@@ -587,20 +587,20 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
                     (demo_img, normals_predicted.permute(0, 3, 1, 2)),
                     dim=3)
 
-        # psnr = metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
-        #                     target_perm[:, :3] / 2 + 0.5,
-        #                     reduction='none').cpu()
-        #                     # mask=target_mask_input.unsqueeze(1).repeat(1,3,1,1)).cpu()
-        psnr_src = (rgb_predicted_perm[:, :3] / 2 + 0.5)
-        psnr_src = Resize((32, 32))(psnr_src)
-        psnr_tgt = (target_perm[:, :3] / 2 + 0.5)
-        psnr_tgt = Resize((32, 32))(psnr_tgt)
-        psnr_mask = target_mask_input.unsqueeze(1).repeat(1, 3, 1, 1)
-        psnr_mask = Resize((32, 32), interpolation=torchvision.transforms.InterpolationMode.NEAREST)(psnr_mask)
-        psnr = metrics.psnr(psnr_src,
-                            psnr_tgt,
-                            reduction='none',
-                            mask=psnr_mask).cpu()
+    # psnr = metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
+    #                     target_perm[:, :3] / 2 + 0.5,
+    #                     reduction='none').cpu()
+    #                     # mask=target_mask_input.unsqueeze(1).repeat(1,3,1,1)).cpu()
+    psnr_src = (rgb_predicted_perm[:, :3] / 2 + 0.5)
+    psnr_src = Resize((32, 32))(psnr_src)
+    psnr_tgt = (target_perm[:, :3] / 2 + 0.5)
+    psnr_tgt = Resize((32, 32))(psnr_tgt)
+    psnr_mask = target_mask_input.unsqueeze(1).repeat(1, 3, 1, 1)
+    psnr_mask = Resize((32, 32), interpolation=torchvision.transforms.InterpolationMode.NEAREST)(psnr_mask)
+    psnr = metrics.psnr(psnr_src,
+                        psnr_tgt,
+                        reduction='none',
+                        mask=psnr_mask).cpu()
     item['psnr'].append(psnr)
     item['ssim'].append(
         metrics.ssim(rgb_predicted_perm[:, :3] / 2 + 0.5,
@@ -843,8 +843,8 @@ if __name__ == '__main__':
     # args.fine_sampling = True
     # no_optimize_pose = args.inv_no_optimize_pose
     no_optimize_pose = False  # for debugging: tmp debug only the nerf given perfect pose
-    init_pose_type = 'pnp'  # pnp / gt / external
-    gpu_ids = [0]
+    init_pose_type = 'external'  # pnp / gt / external
+    gpu_ids = [1]
     utils.fix_random_seed(543)
 
     exp_name = f'nusc_init_{init_pose_type}_opt_pose_{no_optimize_pose==False}' + datetime.now().strftime('_%Y_%m_%d_%H')
