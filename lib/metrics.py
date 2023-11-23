@@ -36,15 +36,18 @@ def psnr(pred, target, reduction='mean', mask=None):
     pred = pred.clamp(0, 1)
     target = target.clamp(0, 1)
     # Modified to rule out bg color's effect
+
     if mask is not None:
+        # ATTENTION: masked score can be very low
         pred = pred[mask > 0]
         target = target[mask > 0]
-        batch_psnr = -10 * torch.log10((pred - target).square()).mean()
+        batch_psnr = -10 * torch.log10((pred - target).square().mean())
     else:
+        # without masked psnr include BG. If an image is all uniform BG, it will be perfect
         batch_psnr = -10 * torch.log10((pred - target).square().mean(dim=[1, 2, 3]))
     # We clamp each sample to max 60 dB, since a pixel-perfect reconstruction
     # would push the mean towards +infinity
-    batch_psnr = batch_psnr.clamp(max=60)
+    batch_psnr = batch_psnr.clamp(max=30)
     if reduction == 'mean':
         return batch_psnr.mean()
     else:

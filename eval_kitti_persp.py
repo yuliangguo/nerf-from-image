@@ -582,8 +582,8 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
 
     psnr = metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
                         target_perm[:, :3] / 2 + 0.5,
-                        reduction='none',
-                        mask=target_mask_input.unsqueeze(1).repeat(1,3,1,1)).cpu()
+                        reduction='none').cpu()
+                        # mask=target_mask_input.unsqueeze(1).repeat(1,3,1,1)).cpu()
     item['psnr'].append(psnr)
     item['ssim'].append(
         metrics.ssim(rgb_predicted_perm[:, :3] / 2 + 0.5,
@@ -701,7 +701,7 @@ if __name__ == '__main__':
     # args.fine_sampling = True
     # no_optimize_pose = args.inv_no_optimize_pose
     no_optimize_pose = False  # for debugging: tmp debug only the nerf given perfect pose
-    init_pose_type = 'external'  # pnp / gt / external
+    init_pose_type = 'pnp'  # pnp / gt / external
     max_num_samples = 250
     utils.fix_random_seed(543)
 
@@ -926,7 +926,7 @@ if __name__ == '__main__':
     print('Running...')
     # deal with each detected object in the image
     for idx, batch_data in enumerate(kitti_loader):
-        # if idx < 220:
+        # if idx < 74:
         #     continue
         # only evaluate a subset to save time
         if idx >= max_num_samples:
