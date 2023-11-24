@@ -587,20 +587,14 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
                     (demo_img, normals_predicted.permute(0, 3, 1, 2)),
                     dim=3)
 
+    psnr_mask = torch.logical_and(target_mask_input.unsqueeze(1) > 0.5, acc_predicted > 0.5)
+    if psnr_mask.sum() == 0:
+        psnr_mask = target_mask_input.unsqueeze(1)
     psnr = metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
                         target_perm[:, :3] / 2 + 0.5,
-                        reduction='none').cpu()
-                        # mask=target_mask_input.unsqueeze(1).repeat(1,3,1,1)).cpu()
-    # psnr_src = (rgb_predicted_perm[:, :3] / 2 + 0.5)
-    # psnr_src = Resize((32, 32))(psnr_src)
-    # psnr_tgt = (target_perm[:, :3] / 2 + 0.5)
-    # psnr_tgt = Resize((32, 32))(psnr_tgt)
-    # psnr_mask = target_mask_input.unsqueeze(1).repeat(1, 3, 1, 1)
-    # psnr_mask = Resize((32, 32), interpolation=torchvision.transforms.InterpolationMode.NEAREST)(psnr_mask)
-    # psnr = metrics.psnr(psnr_src,
-    #                     psnr_tgt,
-    #                     reduction='none',
-    #                     mask=psnr_mask).cpu()
+                        reduction='none', #).cpu()
+                        mask=psnr_mask.repeat(1,3,1,1)).cpu()
+
     item['psnr'].append(psnr)
     item['ssim'].append(
         metrics.ssim(rgb_predicted_perm[:, :3] / 2 + 0.5,
@@ -727,20 +721,13 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
                                                         2).clamp(-1, 1)
 
     if views_per_object > 1:
+        psnr_mask = torch.logical_and(target_mask_perm_.unsqueeze(1) > 0.5, acc_predicted > 0.5)
+        if psnr_mask.sum() == 0:
+            psnr_mask = target_mask_perm_.unsqueeze(1)
         psnr_random = metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
                                    target_img_perm_[:, :3] / 2 + 0.5,
-                                   reduction='none').cpu()  #,
-                                   # mask=target_mask_perm_.unsqueeze(1).repeat(1,3,1,1)).cpu()
-        # psnr_src = (rgb_predicted_perm[:, :3] / 2 + 0.5)
-        # psnr_src = Resize((32, 32))(psnr_src)
-        # psnr_tgt = (target_img_perm_[:, :3] / 2 + 0.5)
-        # psnr_tgt = Resize((32, 32))(psnr_tgt)
-        # psnr_mask = target_mask_perm_.unsqueeze(1).repeat(1, 3, 1, 1)
-        # psnr_mask = Resize((32, 32), interpolation=torchvision.transforms.InterpolationMode.NEAREST)(psnr_mask)
-        # psnr_random = metrics.psnr(psnr_src,
-        #                            psnr_tgt,
-        #                            reduction='none',
-        #                            mask=psnr_mask).cpu()
+                                   reduction='none', #).cpu()
+                                   mask=psnr_mask.repeat(1,3,1,1)).cpu()
 
         item['psnr_random'].append(psnr_random)
 
@@ -844,7 +831,7 @@ if __name__ == '__main__':
     # no_optimize_pose = args.inv_no_optimize_pose
     no_optimize_pose = False  # for debugging: tmp debug only the nerf given perfect pose
     init_pose_type = 'external'  # pnp / gt / external
-    gpu_ids = [1]
+    gpu_ids = [0]
     utils.fix_random_seed(543)
 
     exp_name = f'nusc_init_{init_pose_type}_opt_pose_{no_optimize_pose==False}' + datetime.now().strftime('_%Y_%m_%d_%H')
@@ -854,12 +841,12 @@ if __name__ == '__main__':
         os.mkdir(out_dir)
     print(f'Saving results to: {out_dir}')
 
-    nusc_data_dir = '/data_ssd/guo1syv/Datasets/nuscenes/v1.0-mini-full'
+    nusc_data_dir = '/media/yuliangguo/data_ssd_4tb/Datasets/nuscenes_yuliang/v1.0-mini_full'
     nusc_seg_dir = os.path.join(nusc_data_dir, 'pred_instance')
     nusc_version = 'v1.0-mini'
 
     # upnerf result file
-    external_pose_file = '/data_ssd/guo1syv/Projects/nerf-auto-driving/exps_nuscenes_unipnerf/vehicle.car.v1.0-trainval.use_instance.bsize24.e_rate1.0_2023_03_08/test_nuscenes_opt_pose_1_poss_err_full_reg_iters_3_epoch_39_20231116/codes+poses.pth'
+    external_pose_file = '../nerf-auto-driving/exps_nuscenes_unipnerf/vehicle.car.v1.0-trainval.use_instance.bsize24.e_rate1.0_2023_03_08/test_nuscenes_opt_pose_1_poss_err_full_reg_iters_3_epoch_39_20231116/codes+poses.pth'
     # external_pose_file = None
 
     nusc_dataset = NuScenesDataset(
@@ -1116,6 +1103,8 @@ if __name__ == '__main__':
     print('Running...')
     # deal with each detected object in the image
     for idx, batch_data in enumerate(nusc_loader):
+        # if idx < 360:
+        #     continue
         t1 = time.time()
 
         target_img = batch_data['img_batch'].to(device)
