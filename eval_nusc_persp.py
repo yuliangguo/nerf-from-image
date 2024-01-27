@@ -587,9 +587,9 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
                     (demo_img, normals_predicted.permute(0, 3, 1, 2)),
                     dim=3)
 
-    psnr_mask = torch.logical_and(target_mask_input.unsqueeze(1) > 0.5, acc_predicted > 0.5)
-    if psnr_mask.sum() == 0:
-        psnr_mask = target_mask_input.unsqueeze(1)
+    # psnr_mask = torch.logical_and(target_mask_input.unsqueeze(1) > 0.5, acc_predicted > 0.5)
+    # if psnr_mask.sum() == 0:
+    psnr_mask = target_mask_input.unsqueeze(1)
     psnr = metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
                         target_perm[:, :3] / 2 + 0.5,
                         reduction='none', #).cpu()
@@ -721,9 +721,9 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
                                                         2).clamp(-1, 1)
 
     if views_per_object > 1:
-        psnr_mask = torch.logical_and(target_mask_perm_.unsqueeze(1) > 0.5, acc_predicted > 0.5)
-        if psnr_mask.sum() == 0:
-            psnr_mask = target_mask_perm_.unsqueeze(1)
+        # psnr_mask = torch.logical_and(target_mask_perm_.unsqueeze(1) > 0.5, acc_predicted > 0.5)
+        # if psnr_mask.sum() == 0:
+        psnr_mask = target_mask_perm_.unsqueeze(1)
         psnr_random = metrics.psnr(rgb_predicted_perm[:, :3] / 2 + 0.5,
                                    target_img_perm_[:, :3] / 2 + 0.5,
                                    reduction='none', #).cpu()

@@ -699,7 +699,7 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
 
 if __name__ == '__main__':
     # scene_range should match the target testing dataset. NeRF model will scale based on it
-    dataset_config = {'scene_range': 3.0, 'camera_flipped': True, 'white_background': False}
+    dataset_config = {'scene_range': 3.0, 'camera_flipped': True, 'white_background': True}
     args = arguments.parse_args()
     args.resume_from = 'g_imagenet_car_pretrained'
     args.inv_loss = 'vgg'  # vgg / l1 / mse
@@ -717,6 +717,7 @@ if __name__ == '__main__':
     if not os.path.exists(out_dir):
         os.mkdir(out_dir)
     print(f'Saving results to: {out_dir}')
+    out_log = os.path.join(out_dir, 'log.txt')
 
     kitti_data_dir = '/media/yuliangguo/data_ssd_4tb/Datasets/kitti'
 
@@ -1143,19 +1144,23 @@ if __name__ == '__main__':
                     'report': report,
                     'idx': idx,
                 }, f)
-            print('====================================================')
-            for it in checkpoint_steps:
-                avg_psnr = torch.mean(torch.stack(report[it]['psnr']))
-                depth_errors = torch.stack(report[it]['depth_error'])
-                avg_depth_error = torch.mean(depth_errors[~torch.isnan(depth_errors)])
-                avg_R_err = torch.mean(torch.stack(report[it]['rot_error']))
-                avg_T_err = torch.mean(torch.stack(report[it]['trans_error']))
-                # avg_ssim = torch.mean(torch.stack(report[it]['ssim']))
-                # avg_lpips = torch.mean(torch.stack(report[it]['lpips']))
-
-                print(f'it{it}: psnr avg: {avg_psnr.item()}, depth error avg: {avg_depth_error.item()}, '
-                      f'rot error avg: {avg_R_err.item()}, trans error avg: {avg_T_err.item()}')
+            with open(out_log, 'w') as file:
                 print('====================================================')
+                file.write('====================================================\n')
+                for it in checkpoint_steps:
+                    avg_psnr = torch.mean(torch.stack(report[it]['psnr']))
+                    depth_errors = torch.stack(report[it]['depth_error'])
+                    avg_depth_error = torch.mean(depth_errors[~torch.isnan(depth_errors)])
+                    avg_R_err = torch.mean(torch.stack(report[it]['rot_error']))
+                    avg_T_err = torch.mean(torch.stack(report[it]['trans_error']))
+                    # avg_ssim = torch.mean(torch.stack(report[it]['ssim']))
+                    # avg_lpips = torch.mean(torch.stack(report[it]['lpips']))
+
+                    out_string = f'it{it}: psnr avg: {avg_psnr.item()}, depth error avg: {avg_depth_error.item()}, rot error avg: {avg_R_err.item()}, trans error avg: {avg_T_err.item()}'
+                    print(out_string)
+                    file.write(out_string + '\n')
+                print('====================================================')
+                file.write('====================================================\n')
 
     # final save report
     with utils.open_file(report_checkpoint_path, 'wb') as f:
@@ -1163,16 +1168,20 @@ if __name__ == '__main__':
             'report': report,
             'idx': len(kitti_loader),
         }, f)
-    print('====================================================')
-    for it in checkpoint_steps:
-        avg_psnr = torch.mean(torch.stack(report[it]['psnr']))
-        depth_errors = torch.stack(report[it]['depth_error'])
-        avg_depth_error = torch.mean(depth_errors[~torch.isnan(depth_errors)])
-        avg_R_err = torch.mean(torch.stack(report[it]['rot_error']))
-        avg_T_err = torch.mean(torch.stack(report[it]['trans_error']))
-        # avg_ssim = torch.mean(torch.stack(report[it]['ssim']))
-        # avg_lpips = torch.mean(torch.stack(report[it]['lpips']))
-
-        print(f'it{it}: psnr avg: {avg_psnr.item()}, depth error avg: {avg_depth_error.item()}, '
-              f'rot error avg: {avg_R_err.item()}, trans error avg: {avg_T_err.item()}')
+    with open(out_log, 'w') as file:
         print('====================================================')
+        file.write('====================================================\n')
+        for it in checkpoint_steps:
+            avg_psnr = torch.mean(torch.stack(report[it]['psnr']))
+            depth_errors = torch.stack(report[it]['depth_error'])
+            avg_depth_error = torch.mean(depth_errors[~torch.isnan(depth_errors)])
+            avg_R_err = torch.mean(torch.stack(report[it]['rot_error']))
+            avg_T_err = torch.mean(torch.stack(report[it]['trans_error']))
+            # avg_ssim = torch.mean(torch.stack(report[it]['ssim']))
+            # avg_lpips = torch.mean(torch.stack(report[it]['lpips']))
+
+            out_string = f'it{it}: psnr avg: {avg_psnr.item()}, depth error avg: {avg_depth_error.item()}, rot error avg: {avg_R_err.item()}, trans error avg: {avg_T_err.item()}'
+            print(out_string)
+            file.write(out_string + '\n')
+        print('====================================================')
+        file.write('====================================================\n')
