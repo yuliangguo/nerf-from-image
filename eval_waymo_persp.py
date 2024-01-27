@@ -710,9 +710,9 @@ if __name__ == '__main__':
     # args.fine_sampling = True
     # no_optimize_pose = args.inv_no_optimize_pose
     no_optimize_pose = False  # for debugging: tmp debug only the nerf given perfect pose
-    init_pose_type = 'pnp'  # pnp / gt / external
+    init_pose_type = 'external'  # pnp / gt / external
     gpu_ids = [0]
-    max_num_samples = 200
+    max_num_samples = 1250
     utils.fix_random_seed(543)
 
     exp_name = f'waymo_init_{init_pose_type}_opt_pose_{no_optimize_pose==False}' + datetime.now().strftime('_%Y_%m_%d_%H')
