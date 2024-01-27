@@ -19,7 +19,7 @@ from tqdm import tqdm
 
 import arguments
 from data import loaders
-from data.datasets import KittiDataset
+from data.datasets import WaymoDataset
 from lib import pose_utils
 from lib import nerf_utils
 from lib import utils
@@ -32,7 +32,7 @@ from models import discriminator
 from models import encoder
 
 """
-    This one is the full evaluation on KITTI given accurate intrinsics provided
+    This one is the full evaluation on Waymo given accurate intrinsics provided
 """
 # manually record p3d training distribution
 p3d_scene_range = 1.4  # pretrained model is based on this scale
@@ -611,8 +611,9 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
     #                 rgb_predicted_perm[:, :3] / 2 + 0.5)))
     # if not (args.dataset == 'p3d_car' and use_testset):
     # Ground-truth poses are not available on P3D Car (test set)
-    depth_error = torch.mean(torch.abs(gt_depth - depth_predicted)[torch.logical_and(gt_depth_mask, target_mask_input)])
-    item['depth_error'].append(depth_error)
+    # depth_error = torch.mean(torch.abs(gt_depth - depth_predicted)[torch.logical_and(gt_depth_mask, target_mask_input)])
+    # item['depth_error'].append(depth_error)
+    item['depth_error'].append(0.)
 
     rot_error = pose_utils.rotation_matrix_distance(cam, gt_cam2world_mat)
     item['rot_error'].append(rot_error)
@@ -656,7 +657,8 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
     rgb_predicted_perm = rgb_predicted.detach().permute(0, 3, 1,
                                                         2).clamp(-1, 1)
 
-    print(f'it{it}: psnr: {psnr.item()}, depth error: {depth_error.item()}, '
+    # print(f'it{it}: psnr: {psnr.item()}, depth error: {depth_error.item()}, '
+    print(f'it{it}: psnr: {psnr.item()}, '
           f'rot error: {rot_error.item()}, trans error: {trans_error.item()}')
 
     if export_sample:
@@ -680,8 +682,10 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
                     dim=3)
 
             # print the eval message on the demo image
-            eval_str = 'PSNR: {:.2f},  Depth err: {:.2f}, R err: {:.2f}, T err: {:.2f}'.format(
-                psnr.item(), depth_error.item(), rot_error.item(), trans_error.item())
+            # eval_str = 'PSNR: {:.2f},  Depth err: {:.2f}, R err: {:.2f}, T err: {:.2f}'.format(
+            #     psnr.item(), depth_error.item(), rot_error.item(), trans_error.item())
+            eval_str = 'PSNR: {:.2f}, R err: {:.2f}, T err: {:.2f}'.format(
+                psnr.item(), rot_error.item(), trans_error.item())
             demo_img = ((demo_img.permute(0, 2, 3, 1).squeeze().detach().cpu().numpy() / 2 + 0.5) * 255).astype(np.uint8)
             demo_img = cv2.putText(demo_img.copy(), eval_str, (260, 10), cv2.FONT_HERSHEY_SIMPLEX, .4, (0, 0, 0))
             demo_img = torch.from_numpy(demo_img.astype(np.float32) / 255).unsqueeze(0).permute(0, 3, 1, 2)
@@ -711,27 +715,27 @@ if __name__ == '__main__':
     max_num_samples = 250
     utils.fix_random_seed(543)
 
-    exp_name = f'kitti_init_{init_pose_type}_opt_pose_{no_optimize_pose==False}' + datetime.now().strftime('_%Y_%m_%d_%H')
-    # exp_name = f'kitti_init_{init_pose_type}_opt_pose_{no_optimize_pose==False}' + date.today().strftime('_%Y_%m_%d')
+    exp_name = f'waymo_init_{init_pose_type}_opt_pose_{no_optimize_pose==False}' + datetime.now().strftime('_%Y_%m_%d_%H')
+    # exp_name = f'waymo_init_{init_pose_type}_opt_pose_{no_optimize_pose==False}' + date.today().strftime('_%Y_%m_%d')
     out_dir = os.path.join('outputs', exp_name)
     if not os.path.exists(out_dir):
         os.mkdir(out_dir)
     print(f'Saving results to: {out_dir}')
 
-    kitti_data_dir = '/media/yuliangguo/data_ssd_4tb/Datasets/kitti'
+    waymo_data_dir = '/media/yuliangguo/data_ssd_4tb/Datasets/Waymo_validation_set_DEVIANT'
 
     # upnerf result file
-    external_pose_file = '../nerf-auto-driving/exps_nuscenes_unipnerf/vehicle.car.v1.0-trainval.use_instance.bsize24.e_rate1.0_2023_03_08/test_kitti_opt_pose_1_poss_err_full_reg_iters_3_epoch_39_20231120/codes+poses.pth'
+    external_pose_file = '../nerf-auto-driving/exps_nuscenes_unipnerf/vehicle.car.v1.0-trainval.use_instance.bsize24.e_rate1.0_2023_03_08/test_waymo_opt_pose_1_poss_err_full_reg_iters_3_epoch_39/codes+poses.pth'
     # external_pose_file = None
 
-    kitti_dataset = KittiDataset(
-        kitti_data_dir,
+    waymo_dataset = WaymoDataset(
+        waymo_data_dir,
         debug=False,
         external_pose_file=external_pose_file,
         white_bkgd=dataset_config['white_background']
     )
 
-    kitti_loader = DataLoader(kitti_dataset, batch_size=1, num_workers=4, shuffle=False, pin_memory=True)
+    waymo_loader = DataLoader(waymo_dataset, batch_size=1, num_workers=4, shuffle=False, pin_memory=True)
 
     """
         got the minimal viable portion to model to run
@@ -931,7 +935,7 @@ if __name__ == '__main__':
     report_checkpoint_path = os.path.join(out_dir, 'report_checkpoint.pth')
     print('Running...')
     # deal with each detected object in the image
-    for idx, batch_data in enumerate(kitti_loader):
+    for idx, batch_data in enumerate(waymo_loader):
         # if idx < 74:
         #     continue
         # only evaluate a subset to save time
@@ -963,8 +967,8 @@ if __name__ == '__main__':
         if dataset_config['camera_flipped']:
             # gt_cam2world_mat[:, :3, 1:] *= -1
             gt_cam2world_mat[:, :3, 1:3] *= -1
-        gt_depth = batch_data['depth_batch'].to(device)
-        gt_depth_mask = gt_depth > 0
+        # gt_depth = batch_data['depth_batch'].to(device)
+        # gt_depth_mask = gt_depth > 0
 
         z_ = z_avg.clone().expand(1, -1, -1).contiguous()
 
@@ -1133,7 +1137,7 @@ if __name__ == '__main__':
 
         t2 = time.time()
         print(
-            f'[{idx+1}/{len(kitti_loader)}] Finished batch in {t2 - t1} s ({(t2 - t1)} s/img)'
+            f'[{idx+1}/{len(waymo_loader)}] Finished batch in {t2 - t1} s ({(t2 - t1)} s/img)'
         )
 
         if (idx+1) % 20 == 0:
@@ -1146,14 +1150,15 @@ if __name__ == '__main__':
             print('====================================================')
             for it in checkpoint_steps:
                 avg_psnr = torch.mean(torch.stack(report[it]['psnr']))
-                depth_errors = torch.stack(report[it]['depth_error'])
-                avg_depth_error = torch.mean(depth_errors[~torch.isnan(depth_errors)])
+                # depth_errors = torch.stack(report[it]['depth_error'])
+                # avg_depth_error = torch.mean(depth_errors[~torch.isnan(depth_errors)])
                 avg_R_err = torch.mean(torch.stack(report[it]['rot_error']))
                 avg_T_err = torch.mean(torch.stack(report[it]['trans_error']))
                 # avg_ssim = torch.mean(torch.stack(report[it]['ssim']))
                 # avg_lpips = torch.mean(torch.stack(report[it]['lpips']))
 
-                print(f'it{it}: psnr avg: {avg_psnr.item()}, depth error avg: {avg_depth_error.item()}, '
+                # print(f'it{it}: psnr avg: {avg_psnr.item()}, depth error avg: {avg_depth_error.item()}, '
+                print(f'it{it}: psnr avg: {avg_psnr.item()}, '
                       f'rot error avg: {avg_R_err.item()}, trans error avg: {avg_T_err.item()}')
                 print('====================================================')
 
@@ -1161,18 +1166,19 @@ if __name__ == '__main__':
     with utils.open_file(report_checkpoint_path, 'wb') as f:
         torch.save({
             'report': report,
-            'idx': len(kitti_loader),
+            'idx': len(waymo_loader),
         }, f)
     print('====================================================')
     for it in checkpoint_steps:
         avg_psnr = torch.mean(torch.stack(report[it]['psnr']))
-        depth_errors = torch.stack(report[it]['depth_error'])
-        avg_depth_error = torch.mean(depth_errors[~torch.isnan(depth_errors)])
+        # depth_errors = torch.stack(report[it]['depth_error'])
+        # avg_depth_error = torch.mean(depth_errors[~torch.isnan(depth_errors)])
         avg_R_err = torch.mean(torch.stack(report[it]['rot_error']))
         avg_T_err = torch.mean(torch.stack(report[it]['trans_error']))
         # avg_ssim = torch.mean(torch.stack(report[it]['ssim']))
         # avg_lpips = torch.mean(torch.stack(report[it]['lpips']))
 
-        print(f'it{it}: psnr avg: {avg_psnr.item()}, depth error avg: {avg_depth_error.item()}, '
+        # print(f'it{it}: psnr avg: {avg_psnr.item()}, depth error avg: {avg_depth_error.item()}, '
+        print(f'it{it}: psnr avg: {avg_psnr.item()}, '
               f'rot error avg: {avg_R_err.item()}, trans error avg: {avg_T_err.item()}')
         print('====================================================')

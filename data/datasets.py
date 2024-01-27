@@ -34,6 +34,7 @@ from nuscenes.nuscenes import NuScenes
 from lib import pose_utils
 from lib.utils import pts_in_box_3d, corners_of_box
 from data.kitti_object import kitti_object, get_lidar_in_image_fov
+from data.waymo_object import waymo_object
 
 
 class CustomDataset(torch.utils.data.Dataset):
@@ -1252,6 +1253,182 @@ class KittiDataset(torch.utils.data.Dataset):
         sample_data['img_batch'] = img
         sample_data['mask_batch'] = torch.FloatTensor(mask.squeeze())
         sample_data['depth_batch'] = torch.FloatTensor(depth_map)
+        sample_data['bbox_batch'] = torch.FloatTensor(bbox)
+        sample_data['K_batch'] = torch.FloatTensor(K)
+
+        return sample_data
+
+
+class WaymoDataset(torch.utils.data.Dataset):
+    def __init__(self,
+                 waymo_data_dir,
+                 img_size=128,
+                 debug=False,
+                 external_pose_file=None,
+                 white_bkgd=False,
+                 ):
+        self.waymo_cat = 'Car'
+        self.seg_cat = 'car'
+        self.waymo_data_dir = waymo_data_dir
+        self.waymo = waymo_object(self.waymo_data_dir, split='validation', args=None)
+        self.waymo_seg_dir = os.path.join(self.waymo_data_dir, 'validation/pred_instance')
+        self.img_size = img_size
+
+        # load pre-prepared qualified sample indices
+        subset_index_file = 'data/waymo.val_small' + '.' + self.waymo_cat + '.json'
+        waymo_subset = json.load(open(subset_index_file))
+        self.all_valid_samples = waymo_subset['all_valid_samples']
+        self.sample_attr = waymo_subset['sample_attr']
+        self.lenids = len(self.all_valid_samples)
+        print(f'{self.lenids} annotations in {self.waymo_cat} category are included in dataloader.')
+
+        self.out_gt_depth = True
+        self.pred_box2d = False
+        self.debug = debug
+        self.white_bkgd = white_bkgd
+
+        self.optimized_poses = None
+        if external_pose_file is not None:
+            saved_results = torch.load(external_pose_file, map_location=torch.device('cpu'))
+            self.optimized_poses = saved_results['optimized_poses']
+
+    def __len__(self):
+        return self.lenids
+
+    def __getitem__(self, idx):
+        sample_data = {}
+        data_idx, obj_idx = self.all_valid_samples[idx]
+        if self.debug:
+            print(f'frame: {data_idx}')
+
+        # load data and labels
+        # pc_velo = self.waymo.get_lidar(int(data_idx), np.float32, 4)[:, 0:4]
+        calib = self.waymo.get_calibration(int(data_idx))
+        img = self.waymo.get_image(int(data_idx))
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        objects = self.waymo.get_label_objects(int(data_idx))
+        img_height, img_width, _ = img.shape
+        K = calib.P[:, :3]
+        # if calib.P[0, 3] != 0 or calib.P[1, 3] != 0:
+        #     print('found irregular camera intrinsic')
+        #     print(calib.P)
+        obj = objects[int(obj_idx)]
+
+        box_2d = obj.box2d
+        Ry = np.array([[np.cos(obj.ry), 0., np.sin(obj.ry)],
+                       [0., 1., 0.],
+                       [-np.sin(obj.ry), 0., np.cos(obj.ry)]]).astype(np.float32)
+        # waymo's object frame is defined in a wield way x-front, y-down, z left
+        R_obj = Ry
+        # convert the extra column in K back to object Translation
+        T_obj = np.asarray(obj.t).reshape(3, 1) + np.linalg.inv(K) @ calib.P[:, 3:]
+        obj_pose = np.concatenate([R_obj, T_obj], axis=1)
+        # Compute camera pose in object frame = c2o transformation matrix
+        R_c2o = R_obj.transpose()
+        t_c2o = - R_c2o @ T_obj
+        cam_pose = np.concatenate([R_c2o, t_c2o], axis=1)
+        wlh = np.array([obj.w, obj.l, obj.h])
+        corners_3d = corners_of_box(obj_pose, wlh, is_kitti=True)
+
+        # process mask files
+        json_file = os.path.join(self.waymo_seg_dir,
+                                 data_idx + '.json')
+        preds = json.load(open(json_file))
+        ins_masks = []
+        for box_id in range(0, len(preds['boxes'])):
+            mask_file = os.path.join(self.waymo_seg_dir,
+                                     data_idx + f'_{box_id}.png')
+            mask = imageio.imread(mask_file)
+            ins_masks.append(mask)
+
+        tgt_ins_id = self.sample_attr[data_idx][obj_idx]['seg_id']
+        mask_occ = NuScenesDataset.get_mask_occ_from_ins(ins_masks, tgt_ins_id)
+        # lidar_cnt = self.sample_attr[data_idx][obj_idx]['lidar_cnt']
+        if self.pred_box2d:
+            box_2d = preds['boxes'][tgt_ins_id]
+            # enlarge pred_box
+            # box_2d = roi_resize(box_2d, ratio=self.box2d_rz_ratio)
+
+        # # get lidar projections in image FOV
+        # imgfov_pc_velo, pts_2d, fov_inds = get_lidar_in_image_fov(
+        #     pc_velo[:, 0:3], calib, 0, 0, img_width, img_height, True
+        # )
+        # lidar_pts_im = pts_2d[fov_inds, :]
+        # lidar_pts_im = lidar_pts_im.transpose()
+        # imgfov_pc_rect = calib.project_velo_to_rect(imgfov_pc_velo)
+        # imgfov_pc_rect = imgfov_pc_rect.transpose()
+        # lider_pts_depth = imgfov_pc_rect[2, :]
+        #
+        # # ATTENTION: kitti obj location is defined on the ground, but nusc as box center
+        # pts_ann_indices = pts_in_box_3d(imgfov_pc_rect, corners_3d, keep_top_portion=0.9)
+        # lidar_pts_im_ann = lidar_pts_im[:, pts_ann_indices]
+        # lider_pts_depth_ann = lider_pts_depth[pts_ann_indices]
+        #
+        # depth_map = np.zeros(img.shape[:2]).astype(np.float32)
+        # depth_map[
+        #     lidar_pts_im_ann[1, :].astype(np.int32), lidar_pts_im_ann[0, :].astype(np.int32)] = lider_pts_depth_ann
+        # sample_data['depth_maps'] = torch.from_numpy(depth_map.astype(np.float32))
+
+        if self.optimized_poses is not None:
+            obj_pose_ext = self.optimized_poses[data_idx][obj_idx]
+            sample_data['obj_poses_ext'] = obj_pose_ext
+
+        sample_data['imgs'] = torch.from_numpy(img.astype(np.float32) / 255.)
+        sample_data['masks_occ'] = torch.from_numpy(mask_occ.astype(np.float32))
+        sample_data['rois'] = torch.from_numpy(np.asarray(box_2d).astype(np.int32))
+        sample_data['cam_intrinsics'] = torch.from_numpy(K.astype(np.float32))
+        sample_data['cam_poses'] = torch.from_numpy(np.asarray(cam_pose).astype(np.float32))
+        sample_data['obj_poses'] = torch.from_numpy(np.asarray(obj_pose).astype(np.float32))
+        sample_data['data_idx'] = data_idx
+        sample_data['obj_idx'] = obj_idx
+        sample_data['wlh'] = torch.tensor(wlh, dtype=torch.float32)
+        sample_data['occlusion'] = obj.occlusion
+
+        """
+            Prepare cropped date for BootInv
+        """
+        bbox = CustomDataset.square_bbox(box_2d)
+        K = K.copy()
+
+        # important! sfm_pose must not be overwritten -- it is already in the correct reference frame
+        img = img.astype(np.float32).copy() / 255.
+        img = CustomDataset.crop(img, bbox, bgval=1)
+        mask = (mask_occ > 0).astype(np.float32)[:, :, None]
+        mask = CustomDataset.crop(mask, bbox, bgval=0)
+        # depth_map = depth_map.copy()[:, :, None]
+        # depth_map = CustomDataset.crop(depth_map, bbox, bgval=-1)
+        K[0, 2] -= (bbox[0] + bbox[2])/2
+        K[1, 2] -= (bbox[1] + bbox[3])/2
+
+        # Scale image so largest bbox size is img_size
+        bwidth = np.shape(img)[0]
+        bheight = np.shape(img)[1]
+        scale = self.img_size / float(max(bwidth, bheight))
+        img, _ = CustomDataset.resize_img(img, scale)
+        # mask, _ = CustomDataset.resize_img(mask, scale)
+        mask = cv2.resize(mask, (self.img_size, self.img_size), interpolation=cv2.INTER_NEAREST)
+        # resize sparse depth using nearest rather than interpolation
+        # depth_map = cv2.resize(depth_map, (self.img_size, self.img_size), interpolation=cv2.INTER_NEAREST)
+        # K[:2, :] *= scale
+        K[0, :] /= float(max(bwidth, bheight))
+        K[1, :] /= float(max(bwidth, bheight))
+
+        # Finally transpose the image to 3xHxW
+        img = np.transpose(img, (2, 0, 1))
+
+        mask = mask[None, :, :]
+        if self.white_bkgd:
+            img *= mask
+            img -= (mask - 1)
+            img = img * 2 - 1
+        else:  # grey bg
+            img = img * 2 - 1
+            img *= mask
+        img = torch.FloatTensor(img).permute(1, 2, 0)
+
+        sample_data['img_batch'] = img
+        sample_data['mask_batch'] = torch.FloatTensor(mask.squeeze())
+        # sample_data['depth_batch'] = torch.FloatTensor(depth_map)
         sample_data['bbox_batch'] = torch.FloatTensor(bbox)
         sample_data['K_batch'] = torch.FloatTensor(K)
 
