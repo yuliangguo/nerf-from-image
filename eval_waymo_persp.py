@@ -603,17 +603,16 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
         loss_fn_lpips(rgb_predicted_perm[:, :3],
                       target_perm[:, :3],
                       normalize=False).flatten().cpu())
-    # if not args.inv_export_demo_sample:
-    #     item['inception_activations_front'].append(
-    #         torch.FloatTensor(
-    #             fid.forward_inception_batch(
-    #                 inception_net,
-    #                 rgb_predicted_perm[:, :3] / 2 + 0.5)))
+    if not args.inv_export_demo_sample:
+        item['inception_activations_front'].append(
+            torch.FloatTensor(
+                fid.forward_inception_batch(
+                    inception_net,
+                    rgb_predicted_perm[:, :3] / 2 + 0.5)))
     # if not (args.dataset == 'p3d_car' and use_testset):
     # Ground-truth poses are not available on P3D Car (test set)
-    # depth_error = torch.mean(torch.abs(gt_depth - depth_predicted)[torch.logical_and(gt_depth_mask, target_mask_input)])
-    # item['depth_error'].append(depth_error)
-    item['depth_error'].append(0.)
+    depth_error = torch.mean(torch.abs(gt_depth - depth_predicted)[torch.logical_and(gt_depth_mask, target_mask_input)])
+    item['depth_error'].append(depth_error)
 
     rot_error = pose_utils.rotation_matrix_distance(cam, gt_cam2world_mat)
     item['rot_error'].append(rot_error)
@@ -622,7 +621,6 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
     trans_error = torch.sqrt(torch.sum((pose_utils.invert_space(cam)[:, :3, 3] -
                                         pose_utils.invert_space(gt_cam2world_mat)[:, :3, 3])**2))
     item['trans_error'].append(trans_error)
-
 
     # just perturb the original view
     angle_lim = np.pi * 0.2
@@ -657,8 +655,7 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
     rgb_predicted_perm = rgb_predicted.detach().permute(0, 3, 1,
                                                         2).clamp(-1, 1)
 
-    # print(f'it{it}: psnr: {psnr.item()}, depth error: {depth_error.item()}, '
-    print(f'it{it}: psnr: {psnr.item()}, '
+    print(f'it{it}: psnr: {psnr.item()}, depth error: {depth_error.item()}, '
           f'rot error: {rot_error.item()}, trans error: {trans_error.item()}')
 
     if export_sample:
@@ -682,10 +679,8 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
                     dim=3)
 
             # print the eval message on the demo image
-            # eval_str = 'PSNR: {:.2f},  Depth err: {:.2f}, R err: {:.2f}, T err: {:.2f}'.format(
-            #     psnr.item(), depth_error.item(), rot_error.item(), trans_error.item())
-            eval_str = 'PSNR: {:.2f}, R err: {:.2f}, T err: {:.2f}'.format(
-                psnr.item(), rot_error.item(), trans_error.item())
+            eval_str = 'PSNR: {:.2f},  Depth err: {:.2f}, R err: {:.2f}, T err: {:.2f}'.format(
+                psnr.item(), depth_error.item(), rot_error.item(), trans_error.item())
             demo_img = ((demo_img.permute(0, 2, 3, 1).squeeze().detach().cpu().numpy() / 2 + 0.5) * 255).astype(np.uint8)
             demo_img = cv2.putText(demo_img.copy(), eval_str, (260, 10), cv2.FONT_HERSHEY_SIMPLEX, .4, (0, 0, 0))
             demo_img = torch.from_numpy(demo_img.astype(np.float32) / 255).unsqueeze(0).permute(0, 3, 1, 2)
@@ -726,7 +721,7 @@ if __name__ == '__main__':
     waymo_data_dir = '/media/yuliangguo/data_ssd_4tb/Datasets/Waymo_validation_set_DEVIANT'
 
     # upnerf result file
-    external_pose_file = '../nerf-auto-driving/exps_nuscenes_unipnerf/vehicle.car.v1.0-trainval.use_instance.bsize24.e_rate1.0_2023_02_15_new_infer/test_waymo_opt_pose_1_poss_err_full_reg_iters_3_epoch_39_setv0/codes+poses.pth'
+    external_pose_file = '../nerf-auto-driving/exps_nuscenes_unipnerf/vehicle.car.v1.0-trainval.use_instance.bsize24.e_rate1.0_2023_02_15_new_infer/test_waymo_opt_pose_1_poss_err_full_reg_iters_3_epoch_39_wt_dep/codes+poses.pth'
     # external_pose_file = None
 
     waymo_dataset = WaymoDataset(
@@ -968,8 +963,8 @@ if __name__ == '__main__':
         if dataset_config['camera_flipped']:
             # gt_cam2world_mat[:, :3, 1:] *= -1
             gt_cam2world_mat[:, :3, 1:3] *= -1
-        # gt_depth = batch_data['depth_batch'].to(device)
-        # gt_depth_mask = gt_depth > 0
+        gt_depth = batch_data['depth_batch'].to(device)
+        gt_depth_mask = gt_depth > 0
 
         z_ = z_avg.clone().expand(1, -1, -1).contiguous()
 
@@ -1153,15 +1148,14 @@ if __name__ == '__main__':
                 file.write('====================================================\n')
                 for it in checkpoint_steps:
                     avg_psnr = torch.mean(torch.stack(report[it]['psnr']))
-                    # depth_errors = torch.stack(report[it]['depth_error'])
-                    # avg_depth_error = torch.mean(depth_errors[~torch.isnan(depth_errors)])
+                    depth_errors = torch.stack(report[it]['depth_error'])
+                    avg_depth_error = torch.mean(depth_errors[~torch.isnan(depth_errors)])
                     avg_R_err = torch.mean(torch.stack(report[it]['rot_error']))
                     avg_T_err = torch.mean(torch.stack(report[it]['trans_error']))
                     # avg_ssim = torch.mean(torch.stack(report[it]['ssim']))
                     # avg_lpips = torch.mean(torch.stack(report[it]['lpips']))
 
-                    out_string = f'it{it}: psnr avg: {avg_psnr.item()}, rot error avg: {avg_R_err.item()}, trans error avg: {avg_T_err.item()}'
-                    # print(f'it{it}: psnr avg: {avg_psnr.item()}, depth error avg: {avg_depth_error.item()}, '
+                    out_string = f'it{it}: psnr avg: {avg_psnr.item()}, depth error avg: {avg_depth_error.item()}, rot error avg: {avg_R_err.item()}, trans error avg: {avg_T_err.item()}'
                     print(out_string)
                     file.write(out_string + '\n')
                 print('====================================================')
@@ -1178,15 +1172,14 @@ if __name__ == '__main__':
         file.write('====================================================\n')
         for it in checkpoint_steps:
             avg_psnr = torch.mean(torch.stack(report[it]['psnr']))
-            # depth_errors = torch.stack(report[it]['depth_error'])
-            # avg_depth_error = torch.mean(depth_errors[~torch.isnan(depth_errors)])
+            depth_errors = torch.stack(report[it]['depth_error'])
+            avg_depth_error = torch.mean(depth_errors[~torch.isnan(depth_errors)])
             avg_R_err = torch.mean(torch.stack(report[it]['rot_error']))
             avg_T_err = torch.mean(torch.stack(report[it]['trans_error']))
             # avg_ssim = torch.mean(torch.stack(report[it]['ssim']))
             # avg_lpips = torch.mean(torch.stack(report[it]['lpips']))
 
-            out_string = f'it{it}: psnr avg: {avg_psnr.item()}, rot error avg: {avg_R_err.item()}, trans error avg: {avg_T_err.item()}'
-            # print(f'it{it}: psnr avg: {avg_psnr.item()}, depth error avg: {avg_depth_error.item()}, '
+            out_string = f'it{it}: psnr avg: {avg_psnr.item()}, depth error avg: {avg_depth_error.item()}, rot error avg: {avg_R_err.item()}, trans error avg: {avg_T_err.item()}'
             print(out_string)
             file.write(out_string + '\n')
         print('====================================================')

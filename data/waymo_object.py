@@ -47,7 +47,7 @@ class waymo_object(object):
         depth_dir = "depth"
         pred_dir = "pred"
         if args is not None:
-            # lidar_dir = args.lidar
+            lidar_dir = args.lidar
             depth_dir = args.depthdir
             pred_dir = args.preddir
 
@@ -56,7 +56,7 @@ class waymo_object(object):
         self.calib_dir = os.path.join(self.split_dir, "calib")
 
         self.depthpc_dir = os.path.join(self.split_dir, "depth_pc")
-        # self.lidar_dir = os.path.join(self.split_dir, lidar_dir)
+        self.lidar_dir = os.path.join(self.split_dir, lidar_dir)
         self.depth_dir = os.path.join(self.split_dir, depth_dir)
         self.pred_dir = os.path.join(self.split_dir, pred_dir)
 
@@ -68,11 +68,11 @@ class waymo_object(object):
         img_filename = os.path.join(self.image_dir, "%06d.png" % (idx))
         return utils.load_image(img_filename)
 
-    # def get_lidar(self, idx, dtype=np.float32, n_vec=4):
-    #     assert idx < self.num_samples
-    #     lidar_filename = os.path.join(self.lidar_dir, "%06d.bin" % (idx))
-    #     print(lidar_filename)
-    #     return utils.load_velo_scan(lidar_filename, dtype, n_vec)
+    def get_lidar(self, idx, dtype=np.float32, n_vec=4):
+        assert idx < self.num_samples
+        lidar_filename = os.path.join(self.lidar_dir, "%06d.bin" % (idx))
+        # print(lidar_filename)
+        return utils.load_velo_scan(lidar_filename, dtype, n_vec)
 
     def get_calibration(self, idx):
         assert idx < self.num_samples

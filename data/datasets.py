@@ -1302,7 +1302,7 @@ class WaymoDataset(torch.utils.data.Dataset):
             print(f'frame: {data_idx}')
 
         # load data and labels
-        # pc_velo = self.waymo.get_lidar(int(data_idx), np.float32, 4)[:, 0:4]
+        pc_velo = self.waymo.get_lidar(int(data_idx), np.float32, 4)[:, 0:4]
         calib = self.waymo.get_calibration(int(data_idx))
         img = self.waymo.get_image(int(data_idx))
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -1349,25 +1349,25 @@ class WaymoDataset(torch.utils.data.Dataset):
             # enlarge pred_box
             # box_2d = roi_resize(box_2d, ratio=self.box2d_rz_ratio)
 
-        # # get lidar projections in image FOV
-        # imgfov_pc_velo, pts_2d, fov_inds = get_lidar_in_image_fov(
-        #     pc_velo[:, 0:3], calib, 0, 0, img_width, img_height, True
-        # )
-        # lidar_pts_im = pts_2d[fov_inds, :]
-        # lidar_pts_im = lidar_pts_im.transpose()
-        # imgfov_pc_rect = calib.project_velo_to_rect(imgfov_pc_velo)
-        # imgfov_pc_rect = imgfov_pc_rect.transpose()
-        # lider_pts_depth = imgfov_pc_rect[2, :]
-        #
-        # # ATTENTION: kitti obj location is defined on the ground, but nusc as box center
-        # pts_ann_indices = pts_in_box_3d(imgfov_pc_rect, corners_3d, keep_top_portion=0.9)
-        # lidar_pts_im_ann = lidar_pts_im[:, pts_ann_indices]
-        # lider_pts_depth_ann = lider_pts_depth[pts_ann_indices]
-        #
-        # depth_map = np.zeros(img.shape[:2]).astype(np.float32)
-        # depth_map[
-        #     lidar_pts_im_ann[1, :].astype(np.int32), lidar_pts_im_ann[0, :].astype(np.int32)] = lider_pts_depth_ann
-        # sample_data['depth_maps'] = torch.from_numpy(depth_map.astype(np.float32))
+        # get lidar projections in image FOV
+        imgfov_pc_velo, pts_2d, fov_inds = get_lidar_in_image_fov(
+            pc_velo[:, 0:3], calib, 0, 0, img_width, img_height, True
+        )
+        lidar_pts_im = pts_2d[fov_inds, :]
+        lidar_pts_im = lidar_pts_im.transpose()
+        imgfov_pc_rect = calib.project_velo_to_rect(imgfov_pc_velo)
+        imgfov_pc_rect = imgfov_pc_rect.transpose()
+        lider_pts_depth = imgfov_pc_rect[2, :]
+
+        # ATTENTION: kitti obj location is defined on the ground, but nusc as box center
+        pts_ann_indices = pts_in_box_3d(imgfov_pc_rect, corners_3d, keep_top_portion=0.9)
+        lidar_pts_im_ann = lidar_pts_im[:, pts_ann_indices]
+        lider_pts_depth_ann = lider_pts_depth[pts_ann_indices]
+
+        depth_map = np.zeros(img.shape[:2]).astype(np.float32)
+        depth_map[
+            lidar_pts_im_ann[1, :].astype(np.int32), lidar_pts_im_ann[0, :].astype(np.int32)] = lider_pts_depth_ann
+        sample_data['depth_maps'] = torch.from_numpy(depth_map.astype(np.float32))
 
         if self.optimized_poses is not None:
             obj_pose_ext = self.optimized_poses[data_idx][obj_idx]
@@ -1395,8 +1395,8 @@ class WaymoDataset(torch.utils.data.Dataset):
         img = CustomDataset.crop(img, bbox, bgval=1)
         mask = (mask_occ > 0).astype(np.float32)[:, :, None]
         mask = CustomDataset.crop(mask, bbox, bgval=0)
-        # depth_map = depth_map.copy()[:, :, None]
-        # depth_map = CustomDataset.crop(depth_map, bbox, bgval=-1)
+        depth_map = depth_map.copy()[:, :, None]
+        depth_map = CustomDataset.crop(depth_map, bbox, bgval=-1)
         K[0, 2] -= (bbox[0] + bbox[2])/2
         K[1, 2] -= (bbox[1] + bbox[3])/2
 
@@ -1408,7 +1408,7 @@ class WaymoDataset(torch.utils.data.Dataset):
         # mask, _ = CustomDataset.resize_img(mask, scale)
         mask = cv2.resize(mask, (self.img_size, self.img_size), interpolation=cv2.INTER_NEAREST)
         # resize sparse depth using nearest rather than interpolation
-        # depth_map = cv2.resize(depth_map, (self.img_size, self.img_size), interpolation=cv2.INTER_NEAREST)
+        depth_map = cv2.resize(depth_map, (self.img_size, self.img_size), interpolation=cv2.INTER_NEAREST)
         # K[:2, :] *= scale
         K[0, :] /= float(max(bwidth, bheight))
         K[1, :] /= float(max(bwidth, bheight))
@@ -1428,7 +1428,7 @@ class WaymoDataset(torch.utils.data.Dataset):
 
         sample_data['img_batch'] = img
         sample_data['mask_batch'] = torch.FloatTensor(mask.squeeze())
-        # sample_data['depth_batch'] = torch.FloatTensor(depth_map)
+        sample_data['depth_batch'] = torch.FloatTensor(depth_map)
         sample_data['bbox_batch'] = torch.FloatTensor(bbox)
         sample_data['K_batch'] = torch.FloatTensor(K)
 
