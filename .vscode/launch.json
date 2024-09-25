@@ -1,0 +1,90 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Test BootInv nuScenes",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "eval_nusc_persp.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--resume_from",
+                "g_imagenet_car_pretrained",
+                "--inv_loss",
+                "vgg",                                                  // options: vgg, l1, mse
+                "--init_pose_type",
+                "pnp",                                                  // options: pnp, gt, external 
+                "--nusc_data_dir",
+                "datasets/NuScenes",
+                // "--external_pose_file",                              // uncomment for using external pose initialization
+                // "datasets/NuScenes/codes+poses.pth",                 // uncomment for using external pose initialization
+                "--nusc_version",
+                "v1.0-mini",                                            // change to "v1.0-trainval" for full evaluation
+            ]
+        },
+        {
+            "name": "Test BootInv KITTI",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "eval_kitti_persp.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--resume_from",
+                "g_imagenet_car_pretrained",
+                "--inv_loss",
+                "vgg",                                                  // options: vgg, l1, mse
+                "--init_pose_type",
+                "pnp",                                                  // options: pnp, gt, external 
+                "--kitti_data_dir",
+                "datasets/KITTI",
+                // "--external_pose_file",                              // uncomment for using external pose initialization
+                // "datasets/KITTI/training/codes+poses.pth",           // uncomment for using external pose initialization
+                "--max_num_samples",
+                "200",                                                  // change to "-1" for full evaluation
+            ]
+        },
+        {
+            "name": "Test BootInv Waymo",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "eval_waymo_persp.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--resume_from",
+                "g_imagenet_car_pretrained",
+                "--inv_loss",
+                "vgg",                                                  // options: vgg, l1, mse
+                "--init_pose_type",
+                "pnp",                                                  // options: pnp, gt, external 
+                "--waymo_data_dir",
+                "datasets/Waymo",
+                // "--external_pose_file",                              // uncomment for using external pose initialization
+                // "datasets/Waymo/validation/codes+poses.pth",         // uncomment for using external pose initialization
+                "--max_num_samples",
+                "200",                                                  // change to "-1" for full evaluation
+            ]
+        },
+        {
+            "name": "Evaluate Saved Result",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "evaluate_saved_result.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--result_file",
+                "outputs/waymo_init_external_opt_pose_True_2024_01_30_17/report_checkpoint.pth"
+            ]
+        }
+    ],
+
+}

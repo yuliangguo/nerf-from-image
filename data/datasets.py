@@ -770,7 +770,6 @@ class CARLADataset(torch.utils.data.Dataset):
 class NuScenesDataset(torch.utils.data.Dataset):
     def __init__(self,
                  nusc_data_dir,
-                 nusc_seg_dir,
                  nusc_version,
                  split='val',
                  img_size=128,
@@ -781,7 +780,7 @@ class NuScenesDataset(torch.utils.data.Dataset):
         self.nusc_cat = 'vehicle.car'
         self.seg_cat = 'car'
         self.nusc_data_dir = nusc_data_dir
-        self.nusc_seg_dir = nusc_seg_dir
+        self.nusc_seg_dir = os.path.join(nusc_data_dir, 'pred_instance')
         self.nusc = NuScenes(version=nusc_version, dataroot=nusc_data_dir, verbose=True)
         self.img_size = img_size
 
@@ -807,7 +806,7 @@ class NuScenesDataset(torch.utils.data.Dataset):
         self.white_bkgd = white_bkgd
 
         self.optimized_poses = None
-        if external_pose_file is not None:
+        if external_pose_file is not None and os.path.exists(external_pose_file):
             saved_results = torch.load(external_pose_file, map_location=torch.device('cpu'))
             self.optimized_poses = saved_results['optimized_poses']
 
@@ -1112,7 +1111,7 @@ class KittiDataset(torch.utils.data.Dataset):
         self.white_bkgd = white_bkgd
 
         self.optimized_poses = None
-        if external_pose_file is not None:
+        if external_pose_file is not None and os.path.exists(external_pose_file):
             saved_results = torch.load(external_pose_file, map_location=torch.device('cpu'))
             self.optimized_poses = saved_results['optimized_poses']
 
@@ -1288,7 +1287,7 @@ class WaymoDataset(torch.utils.data.Dataset):
         self.white_bkgd = white_bkgd
 
         self.optimized_poses = None
-        if external_pose_file is not None:
+        if external_pose_file is not None and os.path.exists(external_pose_file):
             saved_results = torch.load(external_pose_file, map_location=torch.device('cpu'))
             self.optimized_poses = saved_results['optimized_poses']
 

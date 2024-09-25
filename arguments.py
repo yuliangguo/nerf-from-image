@@ -193,6 +193,15 @@ def parse_args():
                         type=str,
                         help='Path or URL for demo inference')
     
+    # Testing settings for (NuScenes, KITTI, Waymo)
+    parser.add_argument("--nusc_data_dir", dest="nusc_data_dir", default="datasets/NuScenes")
+    parser.add_argument("--kitti_data_dir", dest="kitti_data_dir", default="datasets/KITTI")
+    parser.add_argument("--waymo_data_dir", dest="waymo_data_dir", default="datasets/Waymo")
+    parser.add_argument("--nusc_version", dest="nusc_version", default="v1.0-mini")
+    parser.add_argument("--max_num_samples", dest="max_num_samples", type=int, default=500)
+    parser.add_argument("--external_pose_file", dest="external_pose_file", default=None)
+    parser.add_argument("--no_optimize_pose", dest="no_optimize_pose", action='store_true')
+    parser.add_argument("--init_pose_type", dest="init_pose_type", default='pnp', help='pnp: original paper`s NOCS + PNP for pose stimation, gt: ground truth pose, external: SUP-NeRF estimated pose')
 
     # Coord regressor params
     parser.add_argument('--coord_resume_from', type=str)

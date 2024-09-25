@@ -559,7 +559,7 @@ def evaluate_inversion(obj_idx, it, out_dir, target_img_fid_, target_center_fid,
                 if dataset_config['white_background']:
                     coords_img += 1 - target_mask.unsqueeze(1)
                     coords_img_empty += 1
-                if init_pose_type == "external":
+                if args.init_pose_type == "external":
                     demo_img = torch.cat((demo_img, coords_img_empty), dim=3)
                 else:
                     demo_img = torch.cat((demo_img, coords_img), dim=3)
@@ -701,17 +701,17 @@ if __name__ == '__main__':
     # scene_range should match the target testing dataset. NeRF model will scale based on it
     dataset_config = {'scene_range': 3.0, 'camera_flipped': True, 'white_background': True}
     args = arguments.parse_args()
-    args.resume_from = 'g_imagenet_car_pretrained'
-    args.inv_loss = 'vgg'  # vgg / l1 / mse
+    # args.resume_from = 'g_imagenet_car_pretrained'
+    # args.inv_loss = 'vgg'  # vgg / l1 / mse
     # args.fine_sampling = True
     # no_optimize_pose = args.inv_no_optimize_pose
-    no_optimize_pose = False  # for debugging: tmp debug only the nerf given perfect pose
-    init_pose_type = 'external'  # pnp / gt / external
+    # no_optimize_pose = False  # for debugging: tmp debug only the nerf given perfect pose
+    # init_pose_type = 'external'  # pnp / gt / external
     gpu_ids = [0]
-    max_num_samples = 250
+    # max_num_samples = 250
     utils.fix_random_seed(543)
 
-    exp_name = f'kitti_init_{init_pose_type}_opt_pose_{no_optimize_pose==False}' + datetime.now().strftime('_%Y_%m_%d_%H')
+    exp_name = f'kitti_init_{args.init_pose_type}_opt_pose_{args.no_optimize_pose==False}' + datetime.now().strftime('_%Y_%m_%d_%H')
     # exp_name = f'kitti_init_{init_pose_type}_opt_pose_{no_optimize_pose==False}' + date.today().strftime('_%Y_%m_%d')
     out_dir = os.path.join('outputs', exp_name)
     if not os.path.exists(out_dir):
@@ -719,16 +719,16 @@ if __name__ == '__main__':
     print(f'Saving results to: {out_dir}')
     out_log = os.path.join(out_dir, 'log.txt')
 
-    kitti_data_dir = '/media/yuliangguo/data_ssd_4tb/Datasets/kitti'
+    # kitti_data_dir = '/media/yuliangguo/data_ssd_4tb/Datasets/kitti'
 
     # upnerf result file
-    external_pose_file = '../nerf-auto-driving/exps_nuscenes_unipnerf/vehicle.car.v1.0-trainval.use_instance.bsize24.e_rate1.0_2023_03_08/test_kitti_opt_pose_1_poss_err_full_reg_iters_3_epoch_39_20231120/codes+poses.pth'
+    # external_pose_file = '../nerf-auto-driving/exps_nuscenes_unipnerf/vehicle.car.v1.0-trainval.use_instance.bsize24.e_rate1.0_2023_03_08/test_kitti_opt_pose_1_poss_err_full_reg_iters_3_epoch_39_20231120/codes+poses.pth'
     # external_pose_file = None
 
     kitti_dataset = KittiDataset(
-        kitti_data_dir,
+        args.kitti_data_dir,
         debug=False,
-        external_pose_file=external_pose_file,
+        external_pose_file=args.external_pose_file,
         white_bkgd=dataset_config['white_background']
     )
 
@@ -933,10 +933,8 @@ if __name__ == '__main__':
     print('Running...')
     # deal with each detected object in the image
     for idx, batch_data in enumerate(kitti_loader):
-        # if idx < 74:
-        #     continue
         # only evaluate a subset to save time
-        if idx >= max_num_samples:
+        if idx >= args.max_num_samples and args.max_num_samples > 0:
             break
         t1 = time.time()
 
@@ -991,9 +989,9 @@ if __name__ == '__main__':
                 z_.data[:] = target_w
 
         # For Debugging: tmp debug only the nerf given perfect pose
-        if init_pose_type == 'gt':
+        if args.init_pose_type == 'gt':
             target_tform_cam2world = gt_cam2world_mat
-        elif init_pose_type == 'external':
+        elif args.init_pose_type == 'external':
             ext_world2cam_mat = torch.eye(4).unsqueeze(0)
             ext_world2cam_mat[0, :3, :] = batch_data['obj_poses_ext'][0, 1]
             ext_cam2world_mat = pose_utils.invert_space(ext_world2cam_mat)
@@ -1031,7 +1029,7 @@ if __name__ == '__main__':
             # camera_flipped=False)
             camera_flipped=dataset_config['camera_flipped'])
 
-        if not no_optimize_pose:
+        if not args.no_optimize_pose:
             t2_.requires_grad_()
             s_.requires_grad_()
             R_.requires_grad_()
@@ -1044,7 +1042,7 @@ if __name__ == '__main__':
         # modified: never optimize focal length, since given the true
         param_list = [z_, R_, s_, t2_]
         param_names = ['z', 'R', 's', 't']
-        if no_optimize_pose:
+        if args.no_optimize_pose:
             param_list = param_list[:1]
             param_names = param_names[:1]
 
@@ -1087,7 +1085,7 @@ if __name__ == '__main__':
                 # ray_multiplier=1 if args.fine_sampling else 2,
                 # res_multiplier=1,
                 compute_normals=False and args.use_sdf,
-                force_no_cam_grad=no_optimize_pose,
+                force_no_cam_grad=args.no_optimize_pose,
                 closure=optimize_iter,
                 closure_params={
                     'target_img': target_img,
