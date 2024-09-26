@@ -721,7 +721,7 @@ if __name__ == '__main__':
     # waymo_data_dir = '/media/yuliangguo/data_ssd_4tb/Datasets/Waymo_validation_set_DEVIANT'
 
     # upnerf result file
-    # external_pose_file = '../nerf-auto-driving/exps_nuscenes_unipnerf/vehicle.car.v1.0-trainval.use_instance.bsize24.e_rate1.0_2023_02_15_new_infer/test_waymo_opt_pose_1_poss_err_full_reg_iters_3_epoch_39_wt_dep/codes+poses.pth'
+    # external_pose_file = '../nerf-auto-driving/exps_nuscenes_supnerf/vehicle.car.v1.0-trainval.use_instance.bsize24.e_rate1.0_2023_02_15_new_infer/test_waymo_opt_pose_1_poss_err_full_reg_iters_3_epoch_39_wt_dep/codes+poses.pth'
     # external_pose_file = None
 
     waymo_dataset = WaymoDataset(

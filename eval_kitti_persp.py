@@ -722,7 +722,7 @@ if __name__ == '__main__':
     # kitti_data_dir = '/media/yuliangguo/data_ssd_4tb/Datasets/kitti'
 
     # upnerf result file
-    # external_pose_file = '../nerf-auto-driving/exps_nuscenes_unipnerf/vehicle.car.v1.0-trainval.use_instance.bsize24.e_rate1.0_2023_03_08/test_kitti_opt_pose_1_poss_err_full_reg_iters_3_epoch_39_20231120/codes+poses.pth'
+    # external_pose_file = '../nerf-auto-driving/exps_nuscenes_supnerf/vehicle.car.v1.0-trainval.use_instance.bsize24.e_rate1.0_2023_03_08/test_kitti_opt_pose_1_poss_err_full_reg_iters_3_epoch_39_20231120/codes+poses.pth'
     # external_pose_file = None
 
     kitti_dataset = KittiDataset(
