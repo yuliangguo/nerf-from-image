@@ -338,6 +338,10 @@ def estimate_poses_batch(target_coords, target_mask, focal_guesses):
 
 def estimate_poses_batch_new(target_coords, target_mask, intrinsics):
     target_mask = target_mask > 0.9
+    # TODO: Skipped those with empty mask predicted from coord_regressor (BootInv)
+    if target_mask[0].sum() == 0:
+        print('Empty mask detected, skipping...')
+        return None, None 
 
     world2cam_mat, errors = pose_estimation.compute_pose_pnp_new(
         target_coords.cpu().numpy(),
@@ -983,6 +987,8 @@ if __name__ == '__main__':
             assert target_coords is not None
             estimated_cam2world_mat, _ = estimate_poses_batch_new(
                 target_coords, target_mask, batch_data['K_batch'])
+            if estimated_cam2world_mat is None:
+                continue
             if use_latent_regressor:
                 assert target_w is not None
                 z_.data[:] = target_w
